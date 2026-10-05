@@ -1,5 +1,7 @@
 """pywebview entry + js_api bridge (React <-> Python)."""
 import json
+from pathlib import Path
+
 import webview
 from server import BridgeServer
 from downloader import Downloader
@@ -60,6 +62,33 @@ class Api:
 
     def list_jobs(self):
         return self.downloader.list_jobs()
+
+    def list_all_chapters(self):
+        from chapter_resolver import list_all_chapters
+        return list_all_chapters(self.config.get("batch_slug", ""),
+                                 self.config.get("batch_id", ""))
+
+    def refresh_chapters(self):
+        from chapter_resolver import clear_cache
+        clear_cache()
+        return self.list_all_chapters()
+
+    def download_chapter_dpps(self, subject_slug, chapter_slug, subject_name, chapter_name):
+        job_id = self.downloader.submit_dpps(subject_slug, chapter_slug, subject_name, chapter_name)
+        return {"job_id": job_id, "queued": True}
+
+    def test_storage(self):
+        try:
+            from storage import Storage
+            st = Storage(self.config.get("base_storage_path", ""),
+                         self.config.get("batch_name", ""))
+            info = st.ensure_chapter_folders("_Test", "_Test")
+            probe = Path(info["index_dir"]) / "write_probe.tmp"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def get_settings(self):
         det = self.check_extension()

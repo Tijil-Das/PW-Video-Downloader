@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import DPPs from './DPPs.jsx';
 
 const STAGE_LABEL = {
   queued: '⏳ queued', signing: '🔑 signing', downloading: '⬇ downloading',
@@ -10,6 +11,7 @@ export default function Downloader() {
   const [ext, setExt] = useState(null);
   const [srv, setSrv] = useState(null);
   const [jobs, setJobs] = useState([]);
+  const [tab, setTab] = useState('lec');
 
   useEffect(() => {
     api.checkExtension().then(setExt).catch(() => {});
@@ -49,6 +51,11 @@ export default function Downloader() {
         <button className="act" onClick={toggle}>{srv?.running ? 'Stop server' : 'Start server'}</button>
       </div>
       <div className="card hint">Use <b>Ctrl+Shift+D</b> in Chrome on any PW lecture card to queue a job.</div>
+      <div className="row" style={{ marginBottom: 8 }}>
+        <button className={'act' + (tab === 'lec' ? ' on' : '')} onClick={() => setTab('lec')}>Lectures</button>
+        <button className={'act' + (tab === 'dpp' ? ' on' : '')} onClick={() => setTab('dpp')}>DPPs</button>
+      </div>
+      {tab === 'dpp' ? <DPPs /> : (<>
       {jobs.length === 0 && <div className="card mut">No jobs yet.</div>}
       {jobs.map((j) => (
         <div className="card" key={j.jobId}>
@@ -64,6 +71,7 @@ export default function Downloader() {
           <div className="bar"><div style={{ width: (j.pct ?? 0) + '%' }} /></div>
         </div>
       ))}
+      </>)}
     </div>
   );
 }

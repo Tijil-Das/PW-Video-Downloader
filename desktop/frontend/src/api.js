@@ -24,4 +24,9 @@ export const api = {
   getSettings: () => call('get_settings'),
   saveSettings: (patch) => call('save_settings', patch),
   openFolder: (path) => call('open_folder', path),
+  listAllChapters: () => call('list_all_chapters'),
+  refreshChapters: () => call('refresh_chapters'),
+  downloadChapterDpps: (subject_slug, chapter_slug, subject_name, chapter_name) =>
+    call('download_chapter_dpps', subject_slug, chapter_slug, subject_name, chapter_name),
+  testStorage: () => call('test_storage'),
 };

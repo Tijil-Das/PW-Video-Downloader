@@ -8,7 +8,12 @@ export default function Settings() {
   useEffect(() => { api.getSettings().then(setCfg).catch(() => {}); }, []);
 
   const save = async () => {
-    const out = await api.saveSettings({ ws_port: cfg.ws_port, auto_start_server: cfg.auto_start_server });
+    const out = await api.saveSettings({
+      ws_port: cfg.ws_port, auto_start_server: cfg.auto_start_server,
+      base_storage_path: cfg.base_storage_path || '',
+      batch_name: cfg.batch_name || '', batch_slug: cfg.batch_slug || '',
+      batch_id: cfg.batch_id || '',
+    });
     setCfg(out);
     setMsg('Saved.');
     setTimeout(() => setMsg(''), 2000);
@@ -37,6 +42,38 @@ export default function Settings() {
             Test connection
           </button>
           <span className="mut" style={{ marginLeft: 8 }}>{msg}</span>
+        </div>
+      </div>
+      <div className="card">
+        <div className="row">
+          <span style={{ flex: 1 }}>Base storage path</span>
+          <input style={{ flex: 2 }} value={cfg.base_storage_path || ''}
+            onChange={(e) => setCfg({ ...cfg, base_storage_path: e.target.value })}
+            placeholder="D:\PW" />
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          <span style={{ flex: 1 }}>Batch name</span>
+          <input style={{ flex: 2 }} value={cfg.batch_name || ''}
+            onChange={(e) => setCfg({ ...cfg, batch_name: e.target.value })}
+            placeholder="Lakshya JEE 2027" />
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          <span style={{ flex: 1 }}>Batch slug</span>
+          <input style={{ flex: 2 }} value={cfg.batch_slug || ''}
+            onChange={(e) => setCfg({ ...cfg, batch_slug: e.target.value })}
+            placeholder="lakshya-jee-2027-181537" />
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          <span style={{ flex: 1 }}>Batch ID</span>
+          <input style={{ flex: 2 }} value={cfg.batch_id || ''}
+            onChange={(e) => setCfg({ ...cfg, batch_id: e.target.value })}
+            placeholder="6779345c20fa0756e4a7fd08" />
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <button className="act"
+            onClick={async () => { const r = await api.testStorage(); setMsg(r && r.ok ? 'Folders OK' : 'Error: ' + (r && r.error)); }}>
+            Test folders
+          </button>
         </div>
       </div>
       <div className="card">

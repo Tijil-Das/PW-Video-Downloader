@@ -1,15 +1,14 @@
 """Job queue: single worker wraps the EXISTING watch.py engine unchanged.
 
-watch.py stays the backend engine (Playwright capture + N_m3u8DL-RE).
-This module only queues jobs, emits stage callbacks, runs the download
-command with the same flags. Do NOT reimplement capture logic here.
+Phase 4: resolve subject/chapter via folder_resolver, save into the
+Storage library layout, download thumbnails (no auth), index lectures.
+done carries the final path.
 """
 import importlib.util
 import queue
 import re
 import subprocess
 import threading
-import time
 import traceback
 import uuid
 from pathlib import Path
@@ -21,7 +20,7 @@ _engine = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_engine)
 
 STAGES = ("queued", "signing", "downloading", "decrypting", "done", "error")
-
+NO_CONFIG_MSG = "Set base storage path and batch name in the app Settings first"
 
 class Downloader:
     def __init__(self, config, on_status=None):
@@ -61,11 +60,25 @@ class Downloader:
                 "batchSubjectId": job.get("batchSubjectId", ""),
                 "thumbnailUrl": job.get("thumbnailUrl", ""),
                 "stage": "queued", "pct": 0, "detail": "queued", "path": None,
-                "_job": job,
+                "_job": job, "_kind": "lecture",
             }
         self.q.put(job_id)
         # BUGFIX: emit AFTER queueing so the worker's signing update can't
         # overtake queued on a reconnecting socket (card stuck forever).
+        self._emit(job_id, "queued", 0, "queued")
+        return job_id
+
+    def submit_dpps(self, subject_slug, chapter_slug, subject_name, chapter_name):
+        job_id = f"dpp-{uuid.uuid4().hex[:8]}"
+        with self.lock:
+            self.jobs[job_id] = {
+                "jobId": job_id, "stage": "queued", "pct": 0, "detail": "queued",
+                "name": f"DPPs: {chapter_name}", "path": None,
+                "_kind": "dpps",
+                "_job": {"subject_slug": subject_slug, "chapter_slug": chapter_slug,
+                         "subject_name": subject_name, "chapter_name": chapter_name},
+            }
+        self.q.put(job_id)
         self._emit(job_id, "queued", 0, "queued")
         return job_id
 
@@ -85,17 +98,69 @@ class Downloader:
             try:
                 if job_id in self.cancelled:
                     continue
-                self._process(job_id)
+                with self.lock:
+                    kind = self.jobs.get(job_id, {}).get("_kind", "lecture")
+                if kind == "dpps":
+                    self._process_dpps(job_id)
+                else:
+                    self._process(job_id)
             except Exception:
                 traceback.print_exc()
                 self._emit(job_id, "error", 0, "worker crash")
             finally:
                 self.q.task_done()
 
+    def _process_dpps(self, job_id):
+        with self.lock:
+            job = dict(self.jobs[job_id].get("_job", {}))
+        base = (self.config.get("base_storage_path") or "").strip()
+        batch = (self.config.get("batch_name") or "").strip()
+        if not base or not batch:
+            self._emit(job_id, "error", 0, NO_CONFIG_MSG)
+            return
+        from storage import Storage
+        from library_manager import LibraryIndex
+        from dpp_fetcher import list_dpps, download_dpp
+        st = Storage(base, batch)
+        paths = st.ensure_chapter_folders(job["subject_name"], job["chapter_name"])
+        idx = LibraryIndex(st)
+        res = list_dpps(self.config.get("batch_slug"), job["subject_slug"], job["chapter_slug"])
+        if res.get("error"):
+            self._emit(job_id, "error", 0, res["error"][:200])
+            return
+        dpps, n = res["dpps"], max(len(res["dpps"]), 1)
+        from datetime import datetime, timezone
+        for i, dpp in enumerate(dpps, 1):
+            if job_id in self.cancelled:
+                return
+            self._emit(job_id, "downloading", int(i / n * 100), f"{i}/{len(dpps)} downloaded")
+            fname = f"{dpp.get('date') + ' - ' if dpp.get('date') else ''}{dpp.get('name')}"
+            r = download_dpp(dpp.get("url"), paths["dpp_dir"], filename=fname, index=i)
+            if r.get("valid"):
+                idx.upsert_dpp(job["subject_name"], job["chapter_name"],
+                               {"dpp_name": dpp.get("name"), "date": dpp.get("date"),
+                                "date_iso": dpp.get("date_iso"), "url": dpp.get("url")},
+                               {"meta": {"batch_slug": self.config.get("batch_slug"),
+                                         "batch_id": self.config.get("batch_id")},
+                                "file_name": Path(r["path"]).name,
+                                "downloaded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                "size_bytes": r.get("size")})
+        with self.lock:
+            self.jobs[job_id]["path"] = paths["dpp_dir"]
+        self._emit(job_id, "done", 100, f"{len(dpps)}/{len(dpps)} saved to {paths['dpp_dir']}")
+
     def _process(self, job_id):
         with self.lock:
             job = dict(self.jobs[job_id].get("_job", {}))
         if job_id in self.cancelled:
+            return
+        # Phase 4.1: Settings gate — refuse before touching Chrome.
+        base = (self.config.get("base_storage_path") or "").strip()
+        batch_name = (self.config.get("batch_name") or "").strip()
+        if not base or not batch_name:
+            self._emit(job_id, "error", 0, NO_CONFIG_MSG)
+            with self.lock:
+                self.jobs[job_id]["no_config"] = True
             return
         # Engine pre-checks WITHOUT launching Chrome: surface config errors
         # on the card instead of silently dying in the worker.
@@ -107,6 +172,20 @@ class Downloader:
         if not wp2.exists():
             self._emit(job_id, "error", 0, f"wp2-custom missing at {wp2}")
             return
+        # Phase 4.2: resolve subject/chapter/slugs BEFORE capture.
+        from folder_resolver import resolve_folder_path
+        info = resolve_folder_path(job)
+        if info.get("error"):
+            self._emit(job_id, "error", 0, f"resolve failed: {info['error']}"[:200])
+            return
+        subject = info.get("subject_name") or "_Unsorted"
+        chapter = info.get("chapter_name") or "_Unsorted"
+        # Phase 4.3: chapter folders.
+        from storage import Storage
+        from library_manager import LibraryIndex
+        st = Storage(base, batch_name)
+        paths = st.ensure_chapter_folders(subject, chapter)
+        idx = LibraryIndex(st)
         # --- signing: existing Playwright capture (signed URL + WP2 key) ---
         self._emit(job_id, "signing", 5, "signing URL + reading key")
         try:
@@ -124,9 +203,11 @@ class Downloader:
             self._emit(job_id, "error", 0, f"NO KEY for KID {kid}")
             return
         # --- downloading/decrypting: same N_m3u8DL-RE flags as watch.py ---
+        # Phase 4.4: final file lands at video_path(lecture_name).
         self._emit(job_id, "downloading", 20, "downloading segments")
-        name = re.sub(r"[^\w\-. ()\[\]]+", "_",
-                      job.get("name", job.get("scheduleId", job_id))).strip(" .")[:150] or "lecture"
+        lecture_name = job.get("name", job.get("scheduleId", job_id))
+        name = re.sub(r"[^\w\-. ()\[\]]+", "_", lecture_name).strip(" .")[:150] or "lecture"
+        video_file = Path(paths["video_path"](lecture_name)).name
         cfg = _engine.CFG
         cmd = [cfg["nm3u8dl_path"], signed, "-H", "Accept: */*",
                "-H", "Origin: https://www.pw.live", "-H", "Referer: https://www.pw.live/",
@@ -134,13 +215,43 @@ class Downloader:
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36"),
                "--append-url-params", "--key", f"{kid}:{key}",
                "-M", "format=mkv", "--auto-select", "--thread-count", "16", "-mt",
-               "--save-name", name, "--save-dir", str(self.out_dir)]
+               "--save-name", Path(video_file).stem, "--save-dir", paths["video_dir"]]
         self._emit(job_id, "decrypting", 70, f"decrypting {str(kid)[:8]}...")
         r = subprocess.run(cmd, cwd=cfg["nm3u8dl_workdir"])
-        out = self.out_dir / f"{name}.mkv"
+        out = Path(paths["video_dir"]) / video_file
         if r.returncode == 0 and out.exists():
+            # Phase 4.5: thumbnail PNG, NO auth (static PW URL).
+            thumb_file = Path(paths["thumb_path"](lecture_name)).name
+            thumb_url = info.get("thumbnail_url")
+            if thumb_url:
+                try:
+                    import requests
+                    tr = requests.get(thumb_url, timeout=30)
+                    if tr.ok and tr.content:
+                        Path(paths["thumb_dir"], thumb_file).write_bytes(tr.content)
+                except Exception:
+                    pass
+            # Phase 4.6: index the lecture.
+            from datetime import datetime, timezone
+            size = out.stat().st_size
+            idx.upsert_lecture(
+                subject, chapter,
+                {"schedule_id": job.get("scheduleId", job_id),
+                 "name": lecture_name,
+                 "date": info.get("lecture_date"),
+                 "date_iso": info.get("lecture_date_iso"),
+                 "thumbnail_url": thumb_url,
+                 "kid": kid, "key": key},
+                {"meta": {"batch_slug": self.config.get("batch_slug"),
+                          "batch_id": self.config.get("batch_id"),
+                          "subject_slug": info.get("subject_slug"),
+                          "chapter_slug": info.get("chapter_slug"),
+                          "chapter_id": info.get("chapter_id")},
+                 "video_file": video_file, "thumb_file": thumb_file,
+                 "downloaded_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                 "size_bytes": size})
             with self.lock:
                 self.jobs[job_id]["path"] = str(out)
-            self._emit(job_id, "done", 100, f"saved ({out.stat().st_size // 1024 // 1024} MB)")
+            self._emit(job_id, "done", 100, f"saved ({size // 1024 // 1024} MB)")
         else:
             self._emit(job_id, "error", 0, f"download FAILED (exit {r.returncode})")
