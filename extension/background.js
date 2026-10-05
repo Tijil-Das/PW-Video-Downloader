@@ -291,17 +291,69 @@ async function handleCapture({ batchSlug, batchSubjectId, subjectId, chapterId, 
 
   // 3) Optional Widevine key if WidevineProxy2 cached one (best-effort)
   const store = await chrome.storage.local.get('wvp_key_' + scheduleId);
+  const thumb = d.thumbnail || d.videoDetails?.thumbnail || d.poster || null;
   const job = {
     scheduleId, name: listName, mpdUrl, isDrmEnabled,
     key: store['wvp_key_' + scheduleId] || null,
     batchSlug, batchId, batchSubjectId, subjectId, chapterId, cardIndex: index,
-    capturedAt: new Date().toISOString()
+    thumbnailUrl: thumb, capturedAt: new Date().toISOString()
   };
-  // 4) Write to disk via downloads (watcher picks up Downloads/pw_jobs/)
-  await chrome.downloads.download({
-    url: 'data:application/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(job, null, 2)),
-    filename: 'pw_jobs/job_' + scheduleId + '.json', saveAs: false
-  });
+  // 4) Send to desktop app over WebSocket (falls back to file if app down)
+  if (wsConnected && ws?.readyState === 1) {
+    const jobId = scheduleId;
+    ws.send(JSON.stringify({ type: 'job', jobId, ...job }));
+    console.log('[pw-cap] sent job to app', jobId);
+    try { await chrome.tabs.sendMessage(senderTabId, { type: 'PW_JOB_STATUS', jobId, stage: 'queued', pct: 0, detail: 'queued' }); } catch (e) {}
+  } else {
+    try { await chrome.tabs.sendMessage(senderTabId, { type: 'PW_APP_DOWN', message: 'PW Downloader app is not running' }); } catch (e) {}
+    console.log('[pw-cap] app not running — saving job file as fallback');
+    await chrome.downloads.download({
+      url: 'data:application/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(job, null, 2)),
+      filename: 'pw_jobs/job_' + scheduleId + '.json', saveAs: false
+    });
+  }
   console.log('[pw-cap] saved job', scheduleId);
   return job;
 }
+
+// --- WebSocket client to desktop app (MV3-safe: reconnect + keepalive) ---
+// Token handshake SKIPPED (personal tool; server checks Origin header).
+// WS traffic keeps the service worker alive (Chrome 116+ resets 30s idle).
+let ws = null, wsConnected = false, wsDelay = 1000, wsPort = 9777;
+try { chrome.storage.local.get('ws_port').then((r) => { if (r?.ws_port) wsPort = Number(r.ws_port); }); } catch (e) {}
+function wsUrl() { return 'ws://127.0.0.1:' + wsPort; }
+function connectWS() {
+  try { if (ws && (ws.readyState === 0 || ws.readyState === 1)) return; } catch (e) {}
+  try { ws = new WebSocket(wsUrl()); } catch (e) { scheduleWS(); return; }
+  ws.onopen = () => {
+    wsConnected = true; wsDelay = 1000;
+    console.log('[pw-cap] WS connected to app');
+    try { ws.send(JSON.stringify({ type: 'hello' })); } catch (e) {}
+  };
+  ws.onmessage = (e) => {
+    let msg = null;
+    try { msg = JSON.parse(e.data); } catch (err) { return; }
+    if (msg.type === 'ping') { try { ws.send(JSON.stringify({ type: 'pong' })); } catch (err) {} return; }
+    if (msg.type === 'welcome' || msg.type === 'ack') return;
+    if (['status', 'done', 'error'].includes(msg.type)) {
+      // Route to the pw.live tab showing the cards (broadcast best-effort).
+      chrome.tabs.query({ url: 'https://www.pw.live/*' }).then((tabs) => {
+        for (const t of tabs) {
+          try { chrome.tabs.sendMessage(t.id, { type: 'PW_JOB_STATUS', ...msg }); } catch (err) {}
+        }
+      }).catch(() => {});
+    }
+  };
+  ws.onclose = () => { wsConnected = false; scheduleWS(); };
+  ws.onerror = () => { try { ws.close(); } catch (e) {} };
+}
+function scheduleWS() {
+  setTimeout(connectWS, wsDelay);
+  wsDelay = Math.min(wsDelay * 2, 30000);
+}
+connectWS();
+// Keepalive alarm (MV3 may suspend idle workers; alarm + WS traffic wakes it)
+try {
+  chrome.alarms?.create('pw-ws-keep', { periodInMinutes: 0.5 });
+  chrome.alarms?.onAlarm.addListener((a) => { if (a?.name === 'pw-ws-keep') connectWS(); });
+} catch (e) {}

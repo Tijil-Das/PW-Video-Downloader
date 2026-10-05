@@ -1,0 +1,26 @@
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: #0f1420; color: #e8ecf4; }
+.app { display: flex; height: 100vh; }
+.side { width: 200px; background: #151c2e; padding: 16px 10px; display: flex; flex-direction: column; gap: 6px; }
+.side h1 { font-size: 16px; margin: 4px 8px 12px; }
+.side button { background: none; border: 0; color: #c6cede; text-align: left; padding: 9px 12px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+.side button.on { background: #243150; color: #fff; }
+.main { flex: 1; padding: 20px 24px; overflow: auto; }
+.card { background: #1a2338; border: 1px solid #2a3756; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+.row { display: flex; align-items: center; gap: 10px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #666; display: inline-block; }
+.dot.green { background: #22c55e; } .dot.red { background: #ef4444; }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 20px; background: #2a3756; }
+.badge.done { background: #14532d; } .badge.error { background: #7f1d1d; }
+.badge.downloading, .badge.decrypting { background: #1e40af; }
+.badge.signing, .badge.queued { background: #57534e; }
+.bar { height: 6px; background: #0b0f1c; border-radius: 4px; margin-top: 8px; overflow: hidden; }
+.bar > div { height: 100%; background: #3b82f6; transition: width .3s; }
+button.act, input, select { background: #243150; color: #fff; border: 1px solid #33406a; border-radius: 8px; padding: 7px 12px; }
+button.act { cursor: pointer; } button.act:hover { background: #2f3f66; }
+input[type=number] { width: 100px; }
+label.tog { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+.mut { color: #93a0bb; font-size: 12px; }
+.thumb { width: 64px; height: 36px; object-fit: cover; border-radius: 6px; background: #0b0f1c; }
+.hint { border: 1px dashed #3b82f6; }
+code { background: #0b0f1c; padding: 1px 6px; border-radius: 6px; }

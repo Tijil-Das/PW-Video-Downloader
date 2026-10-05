@@ -108,4 +108,47 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   }
   if (msg?.type === 'PW_SCAN_TOKENS') { const r = scanPwToken(); reply?.({ ok: true, ...r }); return true; }
   if (msg?.type === 'PW_SESSION_EXPIRED') { toast('Session expired — please log in to pw.live again'); reply?.({ ok: true }); }
+  if (msg?.type === 'PW_JOB_STATUS') { showJobStatus(msg); reply?.({ ok: true }); }
+  if (msg?.type === 'PW_APP_DOWN') { showAppDown(msg?.message); reply?.({ ok: true }); }
 });
+
+// Live job overlay on the hovered card (pointer-events:none, auto-clear 5s)
+let jobOverlayTimer = null;
+function cardUnderCursor() {
+  const el = document.elementFromPoint(mouseX, mouseY);
+  return el?.closest?.('div[class*="_card_"]') || document.querySelector('div[class*="_card_"]');
+}
+function paintOverlay(text, bg) {
+  const card = cardUnderCursor();
+  if (!card) { toast(text); return; }
+  let o = card.querySelector(':scope > .pw-job-overlay');
+  if (!o) {
+    o = document.createElement('div');
+    o.className = 'pw-job-overlay';
+    o.style.cssText = 'position:absolute;inset:auto 8px 8px 8px;display:flex;align-items:center;justify-content:center;padding:6px 10px;border-radius:8px;font:bold 13px sans-serif;color:#fff;z-index:6;pointer-events:none';
+    const prev = card.style.position;
+    if (!prev || prev === 'static') card.style.position = 'relative';
+    card.appendChild(o);
+  }
+  o.textContent = text;
+  o.style.background = bg;
+  clearTimeout(jobOverlayTimer);
+}
+function showJobStatus(m) {
+  const map = {
+    queued: ['⏳ queued', 'rgba(87,83,78,.92)'],
+    signing: ['🔑 signing', 'rgba(87,83,78,.92)'],
+    downloading: [`⬇ ${m.pct ?? 0}%`, 'rgba(30,64,175,.92)'],
+    decrypting: ['🔓 decrypting', 'rgba(30,64,175,.92)'],
+    done: ['✓ saved', 'rgba(22,163,74,.92)'],
+    error: ['✗ ' + (m.message || m.detail || 'error').slice(0, 60), 'rgba(220,38,38,.92)'],
+  };
+  const [text, bg] = map[m.stage] || [String(m.stage || '…'), 'rgba(36,49,80,.92)'];
+  paintOverlay(text, bg);
+  if (m.stage === 'done' || m.stage === 'error')
+    jobOverlayTimer = setTimeout(() => document.querySelectorAll('.pw-job-overlay').forEach((o) => o.remove()), 5000);
+}
+function showAppDown(message) {
+  paintOverlay('⚠ ' + (message || 'App not running — start the PW Downloader desktop app'), 'rgba(220,38,38,.92)');
+  jobOverlayTimer = setTimeout(() => document.querySelectorAll('.pw-job-overlay').forEach((o) => o.remove()), 5000);
+}

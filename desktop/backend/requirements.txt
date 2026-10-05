@@ -1,0 +1,4 @@
+pywebview>=4.4
+websockets>=12.0
+playwright>=1.40
+pyinstaller>=6.0
