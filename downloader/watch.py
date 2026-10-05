@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 CFG = json.loads((ROOT / "config.json").read_text())
 PROFILE_DIR = r"C:\Users\tijil\pw-chrome-profile"
+_CDM_VERIFIED = False  # CDM can't uninstall mid-run; verify once per watcher process
 JOBS = Path(CFG["jobs_dir"]); OUT = Path(CFG["output_dir"])
 OUT.mkdir(parents=True, exist_ok=True); JOBS.mkdir(parents=True, exist_ok=True)
 
@@ -32,6 +33,7 @@ def capture(job):
     so we drive the real Chrome (full CDM) over CDP on a dedicated profile."""
     from playwright.sync_api import sync_playwright
     import subprocess as sp
+    global _CDM_VERIFIED
     signed, login_wait = [], CFG.get("login_wait_seconds", 300) * 1000
     prof = Path(CFG["chrome_profile_dir"])
     exe = CFG.get("chromium_executable")
@@ -51,7 +53,7 @@ def capture(job):
         creationflags=getattr(sp, "CREATE_NO_WINDOW", 0))
     print(f"[watcher] official Chrome launched ({'SILENT' if silent else 'VISIBLE'} pid {chrome_proc.pid}, CDP :{CDP_PORT})", flush=True)
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}", timeout=30000)
+        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}", timeout=8000)
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
         # stealth: hide automation flags so PW's devtool-detector doesn't blank the player
         try:
@@ -81,42 +83,51 @@ def capture(job):
                     and "doubleclick" not in r.url and "csp" not in (r.failure or "") else None)
         except Exception as e: print(f"[watcher] early listeners skipped: {e}", flush=True)
         # FIX2: CDM verification FIRST, on a throwaway page (before PW navigation)
-        print("[watcher] checking Widevine CDM...", flush=True)
-        try:
-            chk = ctx.new_page()
-            chk.goto("chrome://components/")
-            chk.wait_for_timeout(4000)
-            # wait until at least 2 component rows render (Widevine loads async)
-            try: chk.wait_for_function("() => document.body && document.body.innerText.split('Version:').length > 2", timeout=10000)
-            except Exception: pass
-            wv_version = chk.evaluate("""() => {
-                const txt = document.body ? document.body.innerText : '';
-                const i = txt.toLowerCase().indexOf('widevine');
-                if (i < 0) return 'Widevine row MISSING; visible rows: ' + txt.slice(0,200);
-                return txt.slice(Math.max(0,i-60), i+160);
-            }""")
-            print(f"[watcher] Widevine CDM version: {str(wv_version)[:300]}", flush=True)
-            if wv_version in ("0.0.0.0", "not found"):
-                print("[watcher] Widevine CDM NOT installed. Clicking 'Check for updates'...", flush=True)
-                try:
-                    chk.evaluate("""() => {
-                        const rows = document.querySelectorAll('.component');
-                        for (const row of rows) {
-                            if (row.textContent.includes('Widevine')) {
-                                const btn = row.querySelector('button');
-                                if (btn) btn.click();
-                                return;
+        # SPEED-ONLY: verify once per process; skip on later jobs when already 4.10.x.
+        if _CDM_VERIFIED:
+            print("[watcher] CDM pre-check skipped (already verified 4.10.x this process)", flush=True)
+        else:
+            print("[watcher] checking Widevine CDM...", flush=True)
+            try:
+                chk = ctx.new_page()
+                chk.goto("chrome://components/")
+                chk.wait_for_timeout(1000)
+                # wait until at least 2 component rows render (Widevine loads async)
+                try: chk.wait_for_function("() => document.body && document.body.innerText.split('Version:').length > 2", timeout=3000)
+                except Exception: pass
+                wv_version = chk.evaluate("""() => {
+                    const txt = document.body ? document.body.innerText : '';
+                    const i = txt.toLowerCase().indexOf('widevine');
+                    if (i < 0) return 'Widevine row MISSING; visible rows: ' + txt.slice(0,200);
+                    return txt.slice(Math.max(0,i-60), i+160);
+                }""")
+                print(f"[watcher] Widevine CDM version: {str(wv_version)[:300]}", flush=True)
+                if "4.10." in str(wv_version):
+                    _CDM_VERIFIED = True
+                    print("[watcher] CDM verified 4.10.x — future jobs skip CDM checks", flush=True)
+                if wv_version in ("0.0.0.0", "not found"):
+                    print("[watcher] Widevine CDM NOT installed. Clicking 'Check for updates'...", flush=True)
+                    try:
+                        chk.evaluate("""() => {
+                            const rows = document.querySelectorAll('.component');
+                            for (const row of rows) {
+                                if (row.textContent.includes('Widevine')) {
+                                    const btn = row.querySelector('button');
+                                    if (btn) btn.click();
+                                    return;
+                                }
                             }
-                        }
-                    }""")
-                    chk.wait_for_timeout(8000)
-                    chk.reload()
-                    chk.wait_for_timeout(2500)
-                    wv2 = chk.evaluate("() => document.body ? document.body.innerText.slice(0,400) : 'no-body'")
-                    print(f"[watcher] CDM after update attempt: {str(wv2)[:300]}", flush=True)
-                except Exception as e2: print(f"[watcher] CDM update click failed: {e2}", flush=True)
-            chk.close()
-        except Exception as e: print(f"[watcher] CDM pre-check skipped: {e}", flush=True)
+                        }""")
+                        chk.wait_for_timeout(3000)
+                        chk.reload()
+                        chk.wait_for_timeout(1000)
+                        wv2 = chk.evaluate("() => document.body ? document.body.innerText.slice(0,400) : 'no-body'")
+                        print(f"[watcher] CDM after update attempt: {str(wv2)[:300]}", flush=True)
+                        if "4.10." in str(wv2):
+                            _CDM_VERIFIED = True
+                    except Exception as e2: print(f"[watcher] CDM update click failed: {e2}", flush=True)
+                chk.close()
+            except Exception as e: print(f"[watcher] CDM pre-check skipped: {e}", flush=True)
         print(f"[watcher] Chrome running ({'SILENT' if silent else 'VISIBLE'})", flush=True)
         if not silent:
             try: page.bring_to_front()
@@ -227,18 +238,24 @@ def capture(job):
                 break
             except Exception as e:
                 print(f"[watcher] EME probe raced navigation, retry {_eme_try+1}/3: {e}", flush=True)
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(500)
         # FIX: reload the page if the EME probe raced navigation (context destroyed).
         # The sniff hooks survive; the signed URL fires on the fresh load.
         # CDM component version via chrome://components
-        try:
-            cp = ctx.new_page()
-            cp.goto("chrome://components", wait_until="domcontentloaded")
-            cp.wait_for_timeout(1500)
-            ver = cp.evaluate("() => document.documentElement.innerText.match(/Widevine[^\\n]*\\n[^\\n]*/)?.[0] || 'not found'")
-            print(f"[watcher] Widevine CDM version: {ver}", flush=True)
-            cp.close()
-        except Exception as e: print(f"[watcher] CDM version check skipped: {e}", flush=True)
+        # SPEED-ONLY: skip duplicate check when pre-check already verified 4.10.x.
+        if _CDM_VERIFIED:
+            print("[watcher] CDM version check skipped (already verified 4.10.x this process)", flush=True)
+        else:
+            try:
+                cp = ctx.new_page()
+                cp.goto("chrome://components", wait_until="domcontentloaded")
+                cp.wait_for_timeout(1500)
+                ver = cp.evaluate("() => document.documentElement.innerText.match(/Widevine[^\\n]*\\n[^\\n]*/)?.[0] || 'not found'")
+                print(f"[watcher] Widevine CDM version: {ver}", flush=True)
+                if "4.10." in str(ver):
+                    _CDM_VERIFIED = True
+                cp.close()
+            except Exception as e: print(f"[watcher] CDM version check skipped: {e}", flush=True)
         if str(wv).startswith("FAIL"):
             print("[watcher] WARNING: EME probe failed - continuing anyway (real playback is the true test)", flush=True)
             print("[watcher]   (continuing anyway - CDM may still load for real playback)", flush=True)
@@ -259,7 +276,7 @@ def capture(job):
             except Exception as e: print(f"[watcher] WP2 health check failed: {e}", flush=True)
         # (signed-URL + license hooks already registered pre-navigation above)
         print("[watcher] player detected, sniffing signed URL...", flush=True)
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(300)
         # NOTE: early hooks (EARLY-*) already cover console/errors; no duplicate registration here.
         # wait for React hydration: body text OR video OR player chrome, up to 30s
         try:
@@ -270,7 +287,14 @@ def capture(job):
         except Exception: print("[watcher] hydration wait timed out - page still blank", flush=True)
         # CDM needs a moment after EME-OK before the player retries the license;
         # the signed MPD fires on that retry, so settle before clicking play.
-        page.wait_for_timeout(5000)
+        # SPEED-ONLY: event-driven — poll for <video> every 500ms, max 5s (same order/decisions).
+        try:
+            for _settle in range(10):
+                has_video = page.evaluate("() => !!document.querySelector('video')")
+                if has_video or signed:
+                    break
+                page.wait_for_timeout(500)
+        except Exception: pass
         # FIX: click the player's Play button in DOM, then force-play + unpause loop
         try:
             clicked = page.evaluate("""() => {
@@ -366,10 +390,14 @@ def capture(job):
                 }""")
                 print(f"[watcher] video state: {st}", flush=True)
                 if isinstance(st, str) and st.startswith("playing"): break
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(500)
         except Exception as e: print(f"[watcher] play loop skipped: {e}", flush=True)
         try:
-            while not signed: page.wait_for_timeout(1000)
+            # SPEED-ONLY: bounded 60x500ms poll (same 30s window as key-poll; was unbounded).
+            for _sniff in range(60):
+                if signed:
+                    break
+                page.wait_for_timeout(500)
         except Exception as e:
             print(f"[watcher] page died during sniff: {e}", flush=True)
             if not signed:
@@ -389,8 +417,9 @@ def capture(job):
                 if wp2_id and wp2_id in w.url: sw = w; break
             sw = sw or ctx.service_workers[0]
         # WP2 needs time for the license exchange; poll up to 30s for the KID match.
+        # SPEED-ONLY: 60x500ms = same 30s window, 2x faster hit.
         want = (kid or "").replace("-", "").lower()
-        for attempt in range(30):
+        for attempt in range(60):
             try:
                 storage_dump = sw.evaluate("() => new Promise(r => chrome.storage.local.get(null, d => r(d)))")
                 for storage_key, value in (storage_dump or {}).items():
@@ -410,11 +439,11 @@ def capture(job):
                     if key: break
                 if not key and attempt == 0:
                     print(f"[watcher] waiting for license exchange (KID {want})...", flush=True)
-                if key or attempt == 29:
+                if key or attempt == 59:
                     if not key:
                         print(f"[watcher] no entry matched KID {want} after 30s", flush=True)
                     break
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(500)
             except Exception as e:
                 print(f"[watcher] Failed to read service worker storage: {e}", flush=True)
                 break
@@ -439,7 +468,8 @@ def download(ready, j, signed):
     if j.get("key") and j.get("kid"):
         cmd += ["--key", f"{j['kid']}:{j['key']}"]
         print(f"[watcher] decrypting with KEY {j['kid'][:8]}...:{j['key'][:8]}...", flush=True)
-    cmd += ["-M", "format=mkv", "--auto-select", "--save-name", name, "--save-dir", str(OUT)]
+    cmd += ["-M", "format=mkv", "--auto-select", "--thread-count", "16", "-mt",
+            "--save-name", name, "--save-dir", str(OUT)]
     print(f"[watcher] downloading: {name}", flush=True)
     r = subprocess.run(cmd, cwd=CFG["nm3u8dl_workdir"])
     out = OUT / f"{name}.mkv"

@@ -4,15 +4,127 @@ console.log('[pw-cap] webRequest listener registered');
 
 // 1) Cached token, loaded on startup so fetches always have it
 let pwToken = null;
+let pwRefreshToken = null;
+// Verified 2026-10-05 from pw.har (276 entries) + pw-auth-web-sdk.main.CA6PoG5A.js:
+// refresh candidates NOT FOUND — POST /v3/oauth/token: NOT FOUND,
+// POST /v1/oauth/refresh: NOT FOUND, POST /v3/oauth/refresh: NOT FOUND.
+// HAR shows only POST /v3/oauth/verify-token {randomId,organizationId}->{isVerified},
+// and real calls carry NO Authorization header (client-id/client-type path only).
+// So NO fabricated endpoint: fallback = live-reharvest the page's current token.
 async function loadToken() {
-  const { pw_token } = await chrome.storage.local.get('pw_token');
+  const { pw_token, pw_refresh_token } = await chrome.storage.local.get(['pw_token', 'pw_refresh_token']);
   pwToken = pw_token || null;
+  pwRefreshToken = pw_refresh_token || null;
   console.log('[pw-cap] token', pwToken ? 'loaded (' + String(pwToken).slice(0, 12) + '…)' : 'MISSING — set via storage.local.set({pw_token})');
 }
 loadToken().then(ensureBatchMap); // startup: token first, then batch map
 chrome.storage.onChanged.addListener((chg, area) => {
-  if (area === 'local' && chg.pw_token) { pwToken = chg.pw_token.newValue || null; console.log('[pw-cap] token updated'); }
+  if (area !== 'local') return;
+  if (chg.pw_token) { pwToken = chg.pw_token.newValue || null; console.log('[pw-cap] token updated'); }
+  if (chg.pw_refresh_token) { pwRefreshToken = chg.pw_refresh_token.newValue || null; console.log('[pw-cap] refresh token updated'); }
 });
+
+// JWT expiry (base64 payload exp). Returns 0 when not a JWT / no exp.
+function jwtExp(token) {
+  try {
+    const part = String(token).split('.')[1];
+    if (!part) return 0;
+    const json = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/')));
+    return Number(json.exp) || 0;
+  } catch (e) { return 0; }
+}
+
+// Ask an open pw.live tab's content script for the page's current token
+// (live-reharvest fallback — no refresh endpoint exists to call).
+async function reharvestFromTabs() {
+  try {
+    const tabs = await chrome.tabs.query({ url: 'https://www.pw.live/*' });
+    for (const t of tabs) {
+      try {
+        const r = await chrome.tabs.sendMessage(t.id, { type: 'PW_REHARVEST_TOKEN' });
+        if (r?.token && String(r.token).length > 20) {
+          console.log('[pw-cap] reharvested token from tab', t.id, '(' + String(r.token).slice(0, 12) + '…)');
+          return String(r.token);
+        }
+      } catch (e) {}
+    }
+  } catch (e) { console.log('[pw-cap] reharvest tabs skipped:', e?.message); }
+  // chrome.cookies fallback (needs "cookies" permission if added later)
+  try {
+    if (chrome.cookies?.getAll) {
+      const all = await chrome.cookies.getAll({ domain: 'pw.live' });
+      console.log('[pw-cap] pw.live cookies visible:', all.map(c => c.name).join(',') || '(none)');
+      const hit = all.find(c => c.value && c.value.length > 100 && c.value.includes('eyJ'));
+      if (hit) { console.log('[pw-cap] token-like cookie:', hit.name); return hit.value; }
+    }
+  } catch (e) { console.log('[pw-cap] cookie read skipped:', e?.message); }
+  return null;
+}
+
+// Attempted refresh path (only used IF a refresh token was ever stored).
+// Endpoint NOT FOUND in HAR/SDK, so this tries the documented-shape call
+// best-effort and falls back to reharvest; never fabricates success.
+async function tryStoredRefresh() {
+  if (!pwRefreshToken) return null;
+  console.log('[pw-cap] attempting stored-refresh (best-effort, endpoint unverified)...');
+  try {
+    const res = await fetch(API + '/v3/oauth/refresh', {
+      method: 'POST',
+      headers: apiHeaders(),
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: pwRefreshToken })
+    });
+    const text = await res.text();
+    if (!res.ok) { console.log('[pw-cap] refresh failed', res.status, text.slice(0, 200)); return null; }
+    const j = JSON.parse(text);
+    const access = j?.data?.accessToken || j?.data?.token || j?.accessToken || j?.token || null;
+    const rotated = j?.data?.refreshToken || j?.refreshToken || null;
+    if (access) {
+      pwToken = access;
+      const upd = { pw_token: access };
+      if (rotated) { pwRefreshToken = rotated; upd.pw_refresh_token = rotated; }
+      await chrome.storage.local.set(upd);
+      console.log('[pw-cap] token refreshed (' + String(access).slice(0, 12) + '…)');
+      return access;
+    }
+  } catch (e) { console.log('[pw-cap] refresh attempt error:', e?.message); }
+  return null;
+}
+
+async function ensureFreshToken() {
+  if (!pwToken) await loadToken();
+  if (pwToken) {
+    const exp = jwtExp(pwToken);
+    const now = Math.floor(Date.now() / 1000);
+    if (!exp || exp >= now + 60) return pwToken; // fresh (or opaque, can't judge)
+    console.log('[pw-cap] token expiring soon (exp', exp, 'now', now + '), renewing...');
+  }
+  // 1) stored refresh token if present (best-effort)
+  const viaRefresh = await tryStoredRefresh();
+  if (viaRefresh) return viaRefresh;
+  // 2) live-reharvest from open pw.live tab
+  const live = await reharvestFromTabs();
+  if (live) {
+    pwToken = live;
+    await chrome.storage.local.set({ pw_token: live });
+    console.log('[pw-cap] adopted live page token');
+    return live;
+  }
+  return pwToken;
+}
+
+async function sessionExpired(tabId) {
+  console.log('[pw-cap] refresh failed, clearing tokens');
+  pwToken = null; pwRefreshToken = null;
+  try { await chrome.storage.local.remove(['pw_token', 'pw_refresh_token']); } catch (e) {}
+  try {
+    if (tabId) await chrome.tabs.sendMessage(tabId, { type: 'PW_SESSION_EXPIRED' });
+    else {
+      const tabs = await chrome.tabs.query({ url: 'https://www.pw.live/*' });
+      for (const t of tabs) { try { await chrome.tabs.sendMessage(t.id, { type: 'PW_SESSION_EXPIRED' }); } catch (e) {} }
+    }
+  } catch (e) {}
+  console.log('[pw-cap] Session expired — please log in to pw.live again.');
+}
 
 // 2+3) Every api.penpencil.co fetch goes through here with full header set
 function apiHeaders() {
@@ -26,10 +138,22 @@ function apiHeaders() {
   if (pwToken) h['Authorization'] = 'Bearer ' + pwToken; // 2) Bearer on every call
   return h;
 }
-async function apiFetch(url, opts = {}) {
-  if (!pwToken) await loadToken(); // re-try once if worker started cold
+async function apiFetch(url, opts = {}, senderTabId = null, _retried = false) {
+  await ensureFreshToken(); // silent renew before each call (JWT exp check + reharvest)
   const res = await fetch(url, { headers: apiHeaders(), ...opts });
   const text = await res.text();
+  if ((res.status === 401 || res.status === 403) && !_retried) {
+    console.log('[pw-cap] 401/403, attempting silent renew + single retry...');
+    pwToken = null;
+    await ensureFreshToken();
+    const res2 = await fetch(url, { headers: apiHeaders(), ...opts });
+    const text2 = await res2.text();
+    if (res2.status === 401 || res2.status === 403) {
+      console.log('[pw-cap] refresh failed, clearing tokens');
+      await sessionExpired(senderTabId);
+    }
+    return { res: res2, text: text2 };
+  }
   return { res, text };
 }
 
@@ -132,7 +256,7 @@ async function handleCapture({ batchSlug, batchSubjectId, subjectId, chapterId, 
 
   // 1) LIST — big limit so card index is covered
   const listUrl = `${API}/batch-service/v3/batch-subject-schedules/${batchId}/subject/${batchSubjectId}/contents?skip=0&limit=100&contentType=LECTURES&tagId=${chapterId}`;
-  const { res: listRes, text: listText } = await apiFetch(listUrl);
+  const { res: listRes, text: listText } = await apiFetch(listUrl, {}, senderTabId);
   // 4) Log status + first 300 chars of body
   console.log('[pw-cap] LIST', listRes.status, listText.slice(0, 300));
   if (!listRes.ok) throw new Error('LIST failed: HTTP ' + listRes.status + ' ' + listText.slice(0, 120));
@@ -144,7 +268,7 @@ async function handleCapture({ batchSlug, batchSubjectId, subjectId, chapterId, 
 
   // 2) DETAILS (same header wrapper)
   const detUrl = `${API}/v1/batches/${batchId}/subject/${batchSubjectId}/schedule/${scheduleId}/schedule-details`;
-  const { res: detRes, text: detText } = await apiFetch(detUrl);
+  const { res: detRes, text: detText } = await apiFetch(detUrl, {}, senderTabId);
   console.log('[pw-cap] DETAILS', detRes.status, detText.slice(0, 300));
   if (!detRes.ok) throw new Error('DETAILS failed: HTTP ' + detRes.status);
   const d = JSON.parse(detText)?.data || {};

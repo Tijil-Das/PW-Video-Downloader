@@ -54,3 +54,58 @@ document.addEventListener('keydown', e => {
 chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   if (msg?.type === 'PW_CAPTURE_CMD') { capture(); reply?.({ ok: true }); }
 });
+
+// STEP 1+2 fallback — scan page storages for token-like values, log exact keys.
+// Report: which storage holds a token (>100 chars containing eyJ) or a refresh key.
+function scanPwToken() {
+  const out = { cookies: document.cookie ? document.cookie.split(';').length : 0, hits: [] };
+  const isTok = v => typeof v === 'string' && v.length > 100 && v.includes('eyJ');
+  const isRef = (k, v) => typeof v === 'string' && v.length > 20 && /refresh/i.test(k);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      const v = localStorage.getItem(k);
+      if (isTok(v)) { out.hits.push({ store: 'localStorage', key: k, len: v.length, kind: 'access?' }); console.log('[pw-cap] token-like localStorage key:', k, 'len', v.length); }
+      else if (isRef(k, v)) { out.hits.push({ store: 'localStorage', key: k, len: v.length, kind: 'refresh?' }); console.log('[pw-cap] refresh-like localStorage key:', k, 'len', v.length); }
+    }
+  } catch (e) { console.log('[pw-cap] localStorage scan skipped:', e?.message); }
+  try {
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i);
+      const v = sessionStorage.getItem(k);
+      if (isTok(v)) { out.hits.push({ store: 'sessionStorage', key: k, len: v.length, kind: 'access?' }); console.log('[pw-cap] token-like sessionStorage key:', k, 'len', v.length); }
+      else if (isRef(k, v)) { out.hits.push({ store: 'sessionStorage', key: k, len: v.length, kind: 'refresh?' }); console.log('[pw-cap] refresh-like sessionStorage key:', k, 'len', v.length); }
+    }
+  } catch (e) { console.log('[pw-cap] sessionStorage scan skipped:', e?.message); }
+  // cookies: names only (HttpOnly values invisible to content script)
+  try {
+    for (const part of (document.cookie || '').split(';')) {
+      const k = part.split('=')[0]?.trim();
+      if (k) console.log('[pw-cap] cookie visible:', k);
+    }
+  } catch (e) {}
+  // IndexedDB: async — list database names only (values need per-DB read)
+  try {
+    if (indexedDB?.databases) indexedDB.databases().then(dbs => console.log('[pw-cap] IndexedDB DBs:', (dbs || []).map(d => d.name).join(',')));
+  } catch (e) {}
+  if (!out.hits.length) console.log('[pw-cap] scan: NO token-like (>100ch+eyJ) or refresh-like values in web storages');
+  return out;
+}
+chrome.runtime.onMessage.addListener((msg, _s, reply) => {
+  if (msg?.type === 'PW_REHARVEST_TOKEN') {
+    try {
+      const found = scanPwToken();
+      // Return best access candidate value so background can adopt it live.
+      let token = null;
+      const pick = (store) => (found.hits.find(h => h.store === store && h.kind === 'access?') || found.hits.find(h => h.store === store));
+      const hit = pick('localStorage') || pick('sessionStorage');
+      if (hit) {
+        try { token = (hit.store === 'localStorage' ? localStorage : sessionStorage).getItem(hit.key); } catch (e) {}
+      }
+      reply?.({ ok: true, token: token || null, hits: found.hits });
+    } catch (e) { reply?.({ ok: false, error: String(e?.message || e) }); }
+    return true;
+  }
+  if (msg?.type === 'PW_SCAN_TOKENS') { const r = scanPwToken(); reply?.({ ok: true, ...r }); return true; }
+  if (msg?.type === 'PW_SESSION_EXPIRED') { toast('Session expired — please log in to pw.live again'); reply?.({ ok: true }); }
+});
