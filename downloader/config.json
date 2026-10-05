@@ -8,5 +8,6 @@
   "poll_seconds": 3,
   "login_wait_seconds": 300,
   "widevineproxy2_path": "T:\\Coding\\PW Video Downloader\\wp2-custom",
-  "headless": false
+  "headless": false,
+  "silent": true
 }

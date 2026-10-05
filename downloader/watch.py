@@ -39,14 +39,17 @@ def capture(job):
         print(f"[watcher] ERROR: Chrome not found at {exe}", flush=True)
         return None, None, None
     CDP_PORT = 9333
+    silent = CFG.get("silent", True)  # headless shell: no window, keeps CDM + extensions
     chrome_proc = sp.Popen(
         [exe, f"--user-data-dir={prof}", f"--remote-debugging-port={CDP_PORT}",
          "--no-first-run", "--no-default-browser-check",
          "--autoplay-policy=no-user-gesture-required",
          "--disable-features=CrossOriginMediaPlaybackRequiresUserGesture",
-         "--mute-audio", "about:blank"],
-        stdout=sp.DEVNULL, stderr=sp.DEVNULL)
-    print(f"[watcher] official Chrome launched (pid {chrome_proc.pid}, CDP :{CDP_PORT})", flush=True)
+         "--mute-audio"]
+        + (["--headless=new", "--disable-gpu", "--window-size=1280,800"] if silent else ["about:blank"]),
+        stdout=sp.DEVNULL, stderr=sp.DEVNULL,
+        creationflags=getattr(sp, "CREATE_NO_WINDOW", 0))
+    print(f"[watcher] official Chrome launched ({'SILENT' if silent else 'VISIBLE'} pid {chrome_proc.pid}, CDP :{CDP_PORT})", flush=True)
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}", timeout=30000)
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
@@ -114,9 +117,10 @@ def capture(job):
                 except Exception as e2: print(f"[watcher] CDM update click failed: {e2}", flush=True)
             chk.close()
         except Exception as e: print(f"[watcher] CDM pre-check skipped: {e}", flush=True)
-        print("[watcher] Chrome launched VISIBLE for debugging", flush=True)
-        try: page.bring_to_front()
-        except Exception: pass
+        print(f"[watcher] Chrome running ({'SILENT' if silent else 'VISIBLE'})", flush=True)
+        if not silent:
+            try: page.bring_to_front()
+            except Exception: pass
         # SIGNED-URL SNIFF: register BEFORE navigation (player fetches MPD on load,
         # before any play click — the old post-detection registration missed it).
         page.on("request", lambda r: signed.append(r.url)
@@ -419,8 +423,9 @@ def capture(job):
         # --- END NEW BLOCK ---
         if key: print(f"[watcher] key captured for KID {kid}", flush=True)
         else: print("[watcher] no key captured — play this lecture once in regular Chrome with WidevineProxy2 active, then re-run", flush=True)
-        print("[watcher] keeping browser open for 15s so I can inspect...", flush=True)
-        page.wait_for_timeout(15000)
+        if not silent:
+            print("[watcher] keeping browser open for 15s so I can inspect...", flush=True)
+            page.wait_for_timeout(15000)
         browser.close()  # detach CDP; Chrome keeps running for next job
     return signed[0] if signed else None, kid, key
 
