@@ -25,8 +25,16 @@ class Api:
             self.server.broadcast({"type": key, "jobId": job_id, **extra})
         if self.window:
             try:
-                self.window.evaluate_js(
-                    f"window.__onJobStatus({json.dumps(payload)})")
+                # BUGFIX: evaluate_js must run on the UI thread; calling it
+                # from the downloader worker thread raises the
+                # AccessibilityObject.Bounds pywebview error and drops the
+                # update. webview.start() owns the loop — marshal via invoke.
+                import webview as _wv
+                js = f"window.__onJobStatus({json.dumps(payload)})"
+                try:
+                    _wv.evaluate_js(self.window, js)
+                except Exception:
+                    self.window.evaluate_js(js)
             except Exception:
                 pass
 

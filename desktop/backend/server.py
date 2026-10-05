@@ -82,6 +82,18 @@ class BridgeServer:
                         await ws.send(json.dumps({"type": "ack", "jobId": job_id}))
                     except Exception:
                         pass
+                    # BUGFIX: extension may have reconnected between submit
+                    # and this ack (MV3 suspends the worker); re-push the
+                    # job's CURRENT stage so the card never sticks on queued.
+                    try:
+                        cur = next((j for j in self.downloader.list_jobs()
+                                    if j.get("jobId") == job_id), None)
+                        if cur and cur.get("stage") != "queued":
+                            await ws.send(json.dumps({"type": "status", **{
+                                k: cur.get(k) for k in
+                                ("jobId", "stage", "pct", "detail")}}))
+                    except Exception:
+                        pass
                 elif t == "cancel":
                     self.downloader.cancel(msg.get("jobId"))
         except Exception:

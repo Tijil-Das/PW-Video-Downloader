@@ -26,10 +26,11 @@ def _seed_from_watcher():
 
 def load_config():
     cfg = dict(DEFAULTS)
-    cfg.update(_seed_from_watcher())
-    # Re-assert desktop keys (watcher file must not clobber them).
+    seeded = _seed_from_watcher()
+    cfg.update(seeded)
+    # Desktop-only keys always win (watcher file seeds paths/tooling only).
     for k, v in DEFAULTS.items():
-        if k not in cfg:
+        if k not in seeded:
             cfg[k] = v
     try:
         if DESKTOP_CFG.exists():

@@ -63,8 +63,10 @@ class Downloader:
                 "stage": "queued", "pct": 0, "detail": "queued", "path": None,
                 "_job": job,
             }
-        self._emit(job_id, "queued", 0, "queued")
         self.q.put(job_id)
+        # BUGFIX: emit AFTER queueing so the worker's signing update can't
+        # overtake queued on a reconnecting socket (card stuck forever).
+        self._emit(job_id, "queued", 0, "queued")
         return job_id
 
     def cancel(self, job_id):
@@ -95,9 +97,23 @@ class Downloader:
             job = dict(self.jobs[job_id].get("_job", {}))
         if job_id in self.cancelled:
             return
+        # Engine pre-checks WITHOUT launching Chrome: surface config errors
+        # on the card instead of silently dying in the worker.
+        exe = (_engine.CFG.get("chromium_executable") or "")
+        if not exe or not Path(exe).exists():
+            self._emit(job_id, "error", 0, f"Chrome not found at {exe or '(unset)'}")
+            return
+        wp2 = Path(_engine.CFG.get("widevineproxy2_path") or "")
+        if not wp2.exists():
+            self._emit(job_id, "error", 0, f"wp2-custom missing at {wp2}")
+            return
         # --- signing: existing Playwright capture (signed URL + WP2 key) ---
         self._emit(job_id, "signing", 5, "signing URL + reading key")
-        signed, kid, key = _engine.capture(job)
+        try:
+            signed, kid, key = _engine.capture(job)
+        except Exception as e:
+            self._emit(job_id, "error", 0, f"capture crashed: {str(e)[:120]}")
+            return
         if job_id in self.cancelled:
             return
         if not signed:

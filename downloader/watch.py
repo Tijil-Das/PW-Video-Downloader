@@ -42,12 +42,18 @@ def capture(job):
         return None, None, None
     CDP_PORT = 9333
     silent = CFG.get("silent", True)  # headless shell: no window, keeps CDM + extensions
-    chrome_proc = sp.Popen(
-        [exe, f"--user-data-dir={prof}", f"--remote-debugging-port={CDP_PORT}",
+    wp2_dir = str(Path(CFG.get("widevineproxy2_path", "") or ""))
+    args = [exe, f"--user-data-dir={prof}", f"--remote-debugging-port={CDP_PORT}",
          "--no-first-run", "--no-default-browser-check",
          "--autoplay-policy=no-user-gesture-required",
          "--disable-features=CrossOriginMediaPlaybackRequiresUserGesture",
          "--mute-audio"]
+    # BUGFIX: silent Chrome must explicitly load wp2-custom; a bare profile
+    # has no extensions installed, so the pre-flight found no worker -> abort.
+    if wp2_dir and Path(wp2_dir).exists():
+        args += [f"--disable-extensions-except={wp2_dir}", f"--load-extension={wp2_dir}"]
+    chrome_proc = sp.Popen(
+        args
         + (["--headless=new", "--disable-gpu", "--window-size=1280,800"] if silent else ["about:blank"]),
         stdout=sp.DEVNULL, stderr=sp.DEVNULL,
         creationflags=getattr(sp, "CREATE_NO_WINDOW", 0))

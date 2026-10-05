@@ -336,12 +336,23 @@ function connectWS() {
     if (msg.type === 'ping') { try { ws.send(JSON.stringify({ type: 'pong' })); } catch (err) {} return; }
     if (msg.type === 'welcome' || msg.type === 'ack') return;
     if (['status', 'done', 'error'].includes(msg.type)) {
-      // Route to the pw.live tab showing the cards (broadcast best-effort).
-      chrome.tabs.query({ url: 'https://www.pw.live/*' }).then((tabs) => {
-        for (const t of tabs) {
-          try { chrome.tabs.sendMessage(t.id, { type: 'PW_JOB_STATUS', ...msg }); } catch (err) {}
-        }
-      }).catch(() => {});
+      // BUGFIX: sendMessage throws if the tab's content script went stale
+      // (navigation); query fresh + catch per-tab so one dead tab can't
+      // swallow the update meant for the visible card.
+      (async () => {
+        let tabs = [];
+        try { tabs = await chrome.tabs.query({ url: 'https://www.pw.live/*' }); } catch (err) { return; }
+        await Promise.all(tabs.map(async (t) => {
+          try { await chrome.tabs.sendMessage(t.id, { type: 'PW_JOB_STATUS', ...msg }); }
+          catch (err) {
+            // Stale content script: re-inject then retry once.
+            try {
+              await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['content.js'] });
+              await chrome.tabs.sendMessage(t.id, { type: 'PW_JOB_STATUS', ...msg });
+            } catch (e2) {}
+          }
+        }));
+      })();
     }
   };
   ws.onclose = () => { wsConnected = false; scheduleWS(); };

@@ -108,8 +108,8 @@ chrome.runtime.onMessage.addListener((msg, _s, reply) => {
   }
   if (msg?.type === 'PW_SCAN_TOKENS') { const r = scanPwToken(); reply?.({ ok: true, ...r }); return true; }
   if (msg?.type === 'PW_SESSION_EXPIRED') { toast('Session expired — please log in to pw.live again'); reply?.({ ok: true }); }
-  if (msg?.type === 'PW_JOB_STATUS') { showJobStatus(msg); reply?.({ ok: true }); }
-  if (msg?.type === 'PW_APP_DOWN') { showAppDown(msg?.message); reply?.({ ok: true }); }
+  if (msg?.type === 'PW_JOB_STATUS') { showJobStatus(msg); reply?.({ ok: true }); return true; }
+  if (msg?.type === 'PW_APP_DOWN') { showAppDown(msg?.message); reply?.({ ok: true }); return true; }
 });
 
 // Live job overlay on the hovered card (pointer-events:none, auto-clear 5s)
