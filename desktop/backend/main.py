@@ -15,26 +15,23 @@ class Api:
         self.window = None
 
     def _on_status(self, job_id, stage, pct, detail):
+        # NOTE: NO window.evaluate_js here — it synchronously blocks on the
+        # WebView2 control handle and deadlocks when called from the worker
+        # thread (the AccessibilityObject.Bounds traceback + hung UI).
+        # React picks every update via its 3s list_jobs() poll; WS carries
+        # live pushes to the extension. Never push directly to the window.
         payload = {"jobId": job_id, "stage": stage, "pct": pct, "detail": detail}
-        self.server.broadcast({"type": "status", **payload})
+        try:
+            self.server.broadcast({"type": "status", **payload})
+        except Exception:
+            pass
         if stage in ("done", "error"):
             jobs = self.downloader.list_jobs()
             rec = next((j for j in jobs if j.get("jobId") == job_id), payload)
             key = "done" if stage == "done" else "error"
             extra = {"path": rec.get("path")} if stage == "done" else {"message": detail}
-            self.server.broadcast({"type": key, "jobId": job_id, **extra})
-        if self.window:
             try:
-                # BUGFIX: evaluate_js must run on the UI thread; calling it
-                # from the downloader worker thread raises the
-                # AccessibilityObject.Bounds pywebview error and drops the
-                # update. webview.start() owns the loop — marshal via invoke.
-                import webview as _wv
-                js = f"window.__onJobStatus({json.dumps(payload)})"
-                try:
-                    _wv.evaluate_js(self.window, js)
-                except Exception:
-                    self.window.evaluate_js(js)
+                self.server.broadcast({"type": key, "jobId": job_id, **extra})
             except Exception:
                 pass
 

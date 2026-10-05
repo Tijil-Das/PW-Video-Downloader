@@ -96,6 +96,15 @@ class BridgeServer:
                         pass
                 elif t == "cancel":
                     self.downloader.cancel(msg.get("jobId"))
+                elif t == "token_update":
+                    # Central token push: extension -> backend store.
+                    try:
+                        from token_store import set_token
+                        tok = (msg.get("token") or "").strip()
+                        if tok:
+                            set_token(tok, msg.get("source") or "extension-ws")
+                    except Exception:
+                        pass
         except Exception:
             pass
         finally:
@@ -152,17 +161,20 @@ class BridgeServer:
         return True
 
     def broadcast(self, payload):
-        if not self.loop or not self.clients:
+        loop, clients = self.loop, list(self.clients)
+        if not loop or not clients:
             return
         data = json.dumps(payload)
 
         async def _send():
-            for ws in list(self.clients):
+            for ws in clients:  # snapshot: set may change mid-send
                 try:
                     await ws.send(data)
                 except Exception:
                     pass
         try:
-            asyncio.run_coroutine_threadsafe(_send(), self.loop)
+            # Fire-and-forget: never block the worker on a slow socket.
+            # React polls list_jobs(); WS is best-effort live push only.
+            asyncio.run_coroutine_threadsafe(_send(), loop)
         except Exception:
             pass

@@ -95,7 +95,7 @@ async function ensureFreshToken() {
   if (pwToken) {
     const exp = jwtExp(pwToken);
     const now = Math.floor(Date.now() / 1000);
-    if (!exp || exp >= now + 60) return pwToken; // fresh (or opaque, can't judge)
+    if (!exp || exp >= now + 60) { pushTokenToApp(pwToken, 'capture'); return pwToken; }
     console.log('[pw-cap] token expiring soon (exp', exp, 'now', now + '), renewing...');
   }
   // 1) stored refresh token if present (best-effort)
@@ -107,9 +107,18 @@ async function ensureFreshToken() {
     pwToken = live;
     await chrome.storage.local.set({ pw_token: live });
     console.log('[pw-cap] adopted live page token');
+    pushTokenToApp(live, 'reharvest');
     return live;
   }
   return pwToken;
+}
+
+// Push the fresh Bearer into the desktop token_store over the live socket.
+function pushTokenToApp(token, source) {
+  try {
+    if (wsConnected && ws?.readyState === 1 && token)
+      ws.send(JSON.stringify({ type: 'token_update', token, source: source || 'capture' }));
+  } catch (e) {}
 }
 
 async function sessionExpired(tabId) {
