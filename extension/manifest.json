@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "PW Lecture Capturer",
+  "version": "1.0",
+  "description": "Hover a PW lecture card, press Ctrl+Shift+D to save a download job JSON.",
+  "permissions": ["downloads", "storage", "scripting", "activeTab", "webRequest"],
+  "host_permissions": ["https://api.penpencil.co/*", "https://d1d34p8vz63oiq.cloudfront.net/*", "https://www.pw.live/*", "https://*.cloudfront.net/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    { "matches": ["https://www.pw.live/*"], "js": ["content.js"], "run_at": "document_idle" }
+  ],
+  "commands": {
+    "capture-lecture": {
+      "suggested_key": { "default": "Ctrl+Shift+D" },
+      "description": "Capture hovered lecture card as download job"
+    }
+  }
+}

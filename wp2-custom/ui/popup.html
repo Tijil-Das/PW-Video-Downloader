@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WidevineProxy</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<div class="app">
+    <header class="titlebar">
+        <h1><a class="title-link" href="https://github.com/DevLARLEY/WidevineProxy2" target="_blank" rel="noopener noreferrer">WidevineProxy2</a><span class="version" id="version"></span><a class="byline" href="https://github.com/DevLARLEY" target="_blank" rel="noopener noreferrer">by DevLARLEY</a></h1>
+        <div class="titlebar-status">
+            <div class="state" id="statePill">
+                <span class="dot"></span><span id="stateText">disabled</span>
+            </div>
+            <a class="state warn" id="outdatedWarn"
+               href="https://github.com/DevLARLEY/WidevineProxy2/releases/latest"
+               target="_blank" rel="noopener noreferrer" title="A newer version is available" hidden>
+                ⚠ update
+            </a>
+        </div>
+    </header>
+
+    <!-- Settings -->
+    <section class="section">
+        <h2>Settings</h2>
+        <div id="settings">
+            <div class="opt-inline">
+                <div class="opt-row">
+                    <input type="checkbox" id="enabled">
+                    <label for="enabled">Enabled</label>
+                </div>
+                <div class="opt-row">
+                    <label class="switch">
+                        <input type="checkbox" id="darkModeToggle">
+                        <span class="slider"></span>
+                    </label>
+                    <label for="darkModeToggle">Dark mode</label>
+                </div>
+            </div>
+            <div class="opt-row toggle-row">
+                <span class="minilabel inline set-label">Proxy mode</span>
+                <div class="segmented segmented-sm" data-proxy>
+                    <input type="radio" name="proxy_mode" id="proxy_event" value="event" checked>
+                    <label for="proxy_event">Event</label>
+                    <input type="radio" name="proxy_mode" id="proxy_property" value="property">
+                    <label for="proxy_property">Property</label>
+                </div>
+            </div>
+            <div class="opt-row toggle-row">
+                <span class="minilabel inline set-label">Service cert</span>
+                <div class="segmented segmented-sm" data-cert title="When to encrypt the client id">
+                    <input type="radio" name="server_cert" id="cert_never" value="never" checked>
+                    <label for="cert_never">Never</label>
+                    <input type="radio" name="server_cert" id="cert_when" value="when">
+                    <label for="cert_when">When used</label>
+                </div>
+            </div>
+            <div id="type-select">
+                <a class="minilabel">Device Type</a>
+                <div class="segmented">
+                    <input type="radio" id="wvd_select" name="cdm_type" value="wvd" checked>
+                    <label for="wvd_select">Widevine Device</label>
+                    <input type="radio" id="remote_select" name="cdm_type" value="remote">
+                    <label for="remote_select">Remote CDM</label>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Widevine Device -->
+    <section class="section device-section" id="wvd">
+        <div class="dropdown" data-dropdown data-kind="wvd" data-add-label="Choose File" data-empty="No device loaded">
+            <select id="wvd-combobox" class="dd-native" data-role="select"></select>
+        </div>
+    </section>
+
+    <!-- Remote CDM -->
+    <section class="section device-section" id="remote">
+        <div class="dropdown" data-dropdown data-kind="remote" data-add-label="Choose remote.json" data-empty="No remote CDM loaded">
+            <select id="remote-combobox" class="dd-native" data-role="select"></select>
+        </div>
+    </section>
+
+    <!-- DRM status -->
+    <section class="section" id="drm-status-section">
+        <h2>DRM Status</h2>
+        <div id="drmStatus">
+            <div class="drm-progress">
+                <div class="drm-step pending" data-eme="EME_CREATE_MEDIA_KEYS"></div>
+                <div class="drm-step pending" data-eme="EME_CREATE_SESSION"></div>
+                <div class="drm-step pending" data-eme="EME_GENERATE_REQUEST"></div>
+                <div class="drm-step pending" data-eme="EME_LICENSE_REQUEST"></div>
+                <div class="drm-step pending" data-eme="EME_LICENSE"></div>
+            </div>
+            <div class="drm-legend">
+                <span>MediaKeys</span>
+                <span>Session</span>
+                <span>Generated</span>
+                <span>Challenge</span>
+                <span>License</span>
+            </div>
+        </div>
+    </section>
+
+    <!-- Command options -->
+    <section class="section collapsible collapsed" id="command-options">
+        <h2 class="collapse-head">Command Options<span class="collapse-caret">▾</span></h2>
+        <div class="collapse-body">
+            <div class="opt-row toggle-row">
+                <span class="minilabel inline row-label">Packager</span>
+                <div class="segmented segmented-sm" data-shaka>
+                    <input type="radio" name="packager" id="pkg_mp4" value="mp4decrypt" checked>
+                    <label for="pkg_mp4">mp4decrypt</label>
+                    <input type="radio" name="packager" id="pkg_shaka" value="shaka">
+                    <label for="pkg_shaka">shaka-packager</label>
+                </div>
+            </div>
+            <div class="opt-row toggle-row">
+                <span class="minilabel inline row-label">Quotes</span>
+                <div class="segmented segmented-sm" data-quotes>
+                    <input type="radio" name="quote_style" id="quote_cmd" value="cmd" checked>
+                    <label for="quote_cmd">cmd</label>
+                    <input type="radio" name="quote_style" id="quote_bash" value="bash">
+                    <label for="quote_bash">bash</label>
+                </div>
+            </div>
+            <div class="opt-row toggle-row">
+                <span class="minilabel inline row-label">Save name</span>
+                <div class="segmented segmented-sm" data-savename>
+                    <input type="radio" name="save_name" id="save_none" value="none" checked>
+                    <label for="save_none">(none)</label>
+                    <input type="radio" name="save_name" id="save_title" value="title">
+                    <label for="save_title">title</label>
+                    <input type="radio" name="save_name" id="save_url" value="url">
+                    <label for="save_url">url</label>
+                </div>
+            </div>
+            <div class="field-split">
+                <label class="field-col">
+                    <span class="minilabel">Executable name</span>
+                    <input type="text" class="text-box" id="downloader-name" placeholder="N_m3u8DL-RE">
+                </label>
+                <label class="field-col">
+                    <span class="minilabel">Additional arguments</span>
+                    <input type="text" class="text-box" id="downloader-args" placeholder="-M format=mkv">
+                </label>
+            </div>
+        </div>
+    </section>
+    <section class="section">
+        <h2>Keys (past 5 min.)
+            <button type="button" id="openHistory" class="head-btn">History</button>
+        </h2>
+        <div id="key-container">
+            <div class="empty">no keys captured</div>
+        </div>
+    </section>
+</div>
+<script src="popup.min.js"></script>
+</body>
+</html>

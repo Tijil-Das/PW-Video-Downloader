@@ -1,0 +1,87 @@
+/* History page - reuses popup.css tokens & key-item components, overrides
+   the popup's fixed width and adds page/toolbar layout. */
+body {
+    width: auto;
+    max-width: 860px;
+    margin: 0 auto;
+}
+
+.page { padding: 22px 20px 40px; }
+
+.page-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line);
+}
+
+.page-head h1 { font-size: 20px; }
+.page-head .sub { font-size: 11px; color: var(--text-mute); }
+
+/* Toolbar */
+.toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.search {
+    flex: 1;
+    min-width: 200px;
+    padding: 7px 10px;
+    background: var(--panel-2);
+    border: 1px solid var(--line-2);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+}
+
+.search::placeholder { color: var(--text-faint); }
+.search:focus { outline: none; border-color: var(--border-btn-hover); }
+
+.filters { display: flex; }
+
+.filter-btn {
+    padding: 6px 11px !important;
+    font-size: 11px !important;
+    background: var(--panel-2);
+    border: 1px solid var(--line-2);
+    color: var(--text-mute);
+    margin-left: -1px;
+}
+
+.filter-btn:first-child { margin-left: 0; }
+.filter-btn:hover { color: var(--text); }
+.filter-btn.active {
+    background: var(--accent-bg);
+    border-color: var(--accent-border);
+    color: var(--accent);
+    z-index: 1;
+}
+
+.result-count {
+    font-size: 11px;
+    color: var(--text-mute);
+    margin-bottom: 8px;
+}
+
+.result-count b { color: var(--text); font-weight: 600; }
+
+/* List - the .key-item component styling comes from popup.css */
+#history-list {
+    border: 1px solid var(--line);
+    background: var(--panel);
+}
+
+.hist-empty {
+    padding: 44px 16px;
+    text-align: center;
+    color: var(--text-faint);
+    font-style: italic;
+    font-size: 12px;
+}

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Choose Remote CDM</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 16px;
+            font-family: "SF Mono", "Menlo", "Consolas", ui-monospace, monospace;
+            font-size: 12px;
+            background: #111;
+            color: #d4d4d4;
+        }
+        h1 { font-size: 12px; font-weight: 600; margin: 0 0 12px; }
+        input[type="file"] { font-family: inherit; font-size: 11px; width: 100%; }
+        #status { margin-top: 12px; font-size: 11px; color: #888; }
+        #status.err { color: #cc6666; }
+    </style>
+</head>
+<body>
+    <h1>Choose a Remote CDM (remote.json)</h1>
+    <input type="file" id="fileInput" accept=".json,application/json"/>
+    <div id="status"></div>
+    <script src="filePicker.js" defer></script>
+</body>
+</html>

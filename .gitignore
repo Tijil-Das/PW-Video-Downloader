@@ -1,0 +1,42 @@
+# PW Video Downloader — keep source, drop secrets + junk
+# Chrome profiles (contain logins, cookies)
+pw-*-profile/
+pw-*-profile_test/
+C:\Users\tijil\pw-*-profile/
+
+# Job JSONs (contain signed CloudFront URLs = expiring credentials)
+# Uncomment to also ignore: D:\DOWNLOADS is outside the repo anyway
+*.done.json
+*.failed.json
+*.needkey.json
+job_*.json
+
+# Device keys — NEVER commit
+*.wvd
+client_id.bin
+private_key.pem
+
+# Test outputs
+test/
+*.mkv
+*.mp4
+*.m4a
+
+# Raw captures / analysis scratch
+pw.har
+har*.txt
+har_out.txt
+response.json
+schedule-details.json
+analyze*.py
+q*.py
+wp2.zip
+wp2raw/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+Desktop.ini

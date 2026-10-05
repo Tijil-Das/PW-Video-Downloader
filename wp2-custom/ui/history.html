@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WidevineProxy2 - Key History</title>
+    <link rel="stylesheet" href="popup.css">
+    <link rel="stylesheet" href="history.css">
+</head>
+<body>
+<div class="page">
+    <header class="page-head">
+        <h1>Key History</h1>
+        <span class="sub" id="totalCount">0 entries stored</span>
+    </header>
+
+    <div class="toolbar">
+        <input type="text" id="search" class="search" placeholder="Search URL, PSSH, kid/key, command…">
+        <div class="filters" id="typeFilter">
+            <button type="button" class="filter-btn active" data-type="all">All</button>
+            <button type="button" class="filter-btn" data-type="DASH">DASH</button>
+            <button type="button" class="filter-btn" data-type="HLS">HLS</button>
+            <button type="button" class="filter-btn" data-type="MSS">MSS</button>
+            <button type="button" class="filter-btn" data-type="OTHER">Other</button>
+        </div>
+        <button type="button" id="exportAll">Export</button>
+        <button type="button" id="clearAll" class="danger">Clear all</button>
+    </div>
+
+    <div class="result-count" id="resultCount"></div>
+    <div id="history-list"></div>
+</div>
+
+<script src="history.min.js"></script>
+</body>
+</html>

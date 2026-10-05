@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "WidevineProxy2",
+  "version": "1.2.7",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "unlimitedStorage",
+    "webRequest",
+    "clipboardWrite",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*/*"
+  ],
+  "action": {
+    "default_popup": "ui/popup.html",
+    "default_icon": {
+      "16": "images/icon-16.png",
+      "32": "images/icon-32.png",
+      "64": "images/icon-64.png",
+      "128": "images/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "images/icon-16.png",
+    "32": "images/icon-32.png",
+    "64": "images/icon-64.png",
+    "128": "images/icon-128.png"
+  },
+  "background": {
+    "scripts": ["library/background/bundle.min.js"],
+    "service_worker": "library/background/bundle.min.js",
+    "type": "module"
+  },
+  "content_scripts": [],
+  "web_accessible_resources": [{ "resources": ["device.wvd"], "matches": ["<all_urls>"] }],
+  "externally_connectable": { "matches": ["*://localhost/*", "*://*.pw.live/*"] },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "DevLARLEY@larley.dev",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}
