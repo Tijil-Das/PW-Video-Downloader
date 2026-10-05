@@ -76,6 +76,19 @@ class BridgeServer:
                 elif t == "pong":
                     self.last_pong[id(ws)] = time.time()
                 elif t == "job":
+                    # Phase 4.1 fast-path: refuse unconfigured jobs BEFORE
+                    # queueing so the card shows the Settings error at once.
+                    _cfg = self.downloader.config or {}
+                    if not (_cfg.get("base_storage_path") or "").strip() or \
+                       not (_cfg.get("batch_name") or "").strip():
+                        try:
+                            await ws.send(json.dumps({
+                                "type": "error", "jobId": msg.get("jobId") or msg.get("scheduleId"),
+                                "code": "no_config",
+                                "message": "Set base storage path and batch name in the app Settings first"}))
+                        except Exception:
+                            pass
+                        continue
                     job_id = self.downloader.submit(msg)
                     self.on_event("job", job_id)
                     try:

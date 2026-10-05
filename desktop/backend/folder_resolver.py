@@ -25,6 +25,10 @@ def _sanitize(name: str) -> str:
     return s if s else "_Unsorted"
 
 
+# Public alias so storage.py (Phase 1) reuses the exact same rules.
+sanitize = _sanitize
+
+
 def _parse_date(raw):
     if not raw or not isinstance(raw, str):
         return None
@@ -53,7 +57,10 @@ def _fail(lecture_name, message, thumbnail_url=None):
     logger.info("folder_resolver error: %s", message)
     return {
         "subject_name": None,
+        "subject_slug": None,
         "chapter_name": None,
+        "chapter_slug": None,
+        "chapter_id": None,
         "lecture_name": lecture_name,
         "lecture_date": None,
         "lecture_date_iso": None,
@@ -135,8 +142,19 @@ def resolve_folder_path(lecture: dict, pw_token: str | None = None) -> dict:
         return _fail(raw_name, "unexpected response shape", thumbnail_url)
     subject = data.get("subject") or {}
     subject_name = subject.get("name") if isinstance(subject, dict) else None
+    subject_slug = subject.get("slug") if isinstance(subject, dict) else None
     tags = data.get("tags")
     chapter_name = tags[0] if isinstance(tags, list) and tags else None
+    # Phase 2: chapter_slug passthrough only — no new HTTP calls.
+    # Response has tagIds[] but no tagSlugs, so chapter_slug stays None;
+    # Phase 5's chapter_resolver fills it in from the topics API.
+    chapter_slug = None
+    tag_slugs = data.get("tagSlugs")
+    if isinstance(tag_slugs, list) and tag_slugs and isinstance(tag_slugs[0], str):
+        chapter_slug = tag_slugs[0]
+    if chapter_slug is None:
+        logger.warning("chapter_slug not in schedule-details; leaving None (Phase 5 fills it)")
+    chapter_id = data.get("chapterId")
     raw_date = next((data.get(k) for k in ("startTime", "date", "createdAt", "scheduleDate") if data.get(k)), None)
     parsed_date = _parse_date(raw_date)
     logger.info("date raw=%s parsed=%s", raw_date, parsed_date)
@@ -145,7 +163,10 @@ def resolve_folder_path(lecture: dict, pw_token: str | None = None) -> dict:
     logger.info("Resolved subject=%r chapter=%r", subject_name, chapter_name)
     return {
         "subject_name": subject_name,
+        "subject_slug": subject_slug,
         "chapter_name": chapter_name,
+        "chapter_slug": chapter_slug,
+        "chapter_id": chapter_id,
         "lecture_name": raw_name,
         "lecture_date": parsed_date,
         "lecture_date_iso": raw_date,

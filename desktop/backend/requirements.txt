@@ -3,3 +3,4 @@ websockets>=12.0
 playwright>=1.40
 pyinstaller>=6.0
 requests>=2.31
+filelock>=3.12
