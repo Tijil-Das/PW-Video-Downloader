@@ -30,6 +30,128 @@ def kid_from_mpd(mpd_url):
     except Exception as e: print(f"[watcher] KID parse skipped: {e}", flush=True)
     return None
 
+def _launch_browser(p, exe, prof, args, headless, tag):
+    """Single launch attempt with 60s timeout + full log on TargetClosedError."""
+    print(f"[watcher] profile: {prof}", flush=True)
+    hd = bool(headless)
+    # Strip any headless shell flag when we want a VISIBLE window and vice versa.
+    use_args = [a for a in args if a != "--headless=new"]
+    if hd:
+        use_args = use_args + ["--headless=new", "--disable-gpu", "--window-size=1280,800"]
+    try:
+        browser = p.chromium.launch_persistent_context(
+            user_data_dir=str(prof), executable_path=exe,
+            headless=hd, no_viewport=True, args=use_args, timeout=60000)
+        print(f"[watcher] launch OK ({tag})", flush=True)
+        return browser
+    except Exception as e:
+        print(f"[watcher] LAUNCH FAILED ({tag}): {e}", flush=True)
+        return None
+
+
+def _fresh_profile_guard(prof):
+    """Bundled Chromium can't open a branded-Chrome-154 profile (TargetClosedError
+    before any page loads). If this dir looks claimed by another Chrome build,
+    back it up once and start fresh. NEVER shares pw-official-profile."""
+    try:
+        prof = Path(prof)
+        marker = prof / ".pw-chromium-owner"
+        ours = "playwright-chromium-1243"
+        off = str(Path(CFG.get("chrome_profile_dir", ""))).lower()
+        if "pw-official-profile" in off or "pw-chrome-profile" in off:
+            print("[watcher] ERROR: official-Chrome profile configured — refusing shared profile", flush=True)
+            return False
+        if prof.exists():
+            if marker.exists():
+                try:
+                    if marker.read_text().strip() == ours:
+                        return True
+                except Exception:
+                    pass
+            # Unknown/foreign profile: check version file as a hint, then back up.
+            lv = prof / "Last Version"
+            if lv.exists():
+                try:
+                    print(f"[watcher] profile Last Version: {lv.read_text()[:40]!r}", flush=True)
+                except Exception:
+                    pass
+            bak = Path(str(prof) + ".bak")
+            import shutil
+            if bak.exists():
+                shutil.rmtree(bak, ignore_errors=True)
+            try:
+                prof.rename(bak)
+                print("[watcher] profile version mismatch, starting fresh", flush=True)
+            except Exception as e:
+                print(f"[watcher] profile backup failed: {e}", flush=True)
+                return False
+        try:
+            prof.mkdir(parents=True, exist_ok=True)
+            marker.write_text(ours)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"[watcher] profile guard failed: {e}", flush=True)
+        return False
+
+
+def _needs_login(page):
+    """Heuristic: expired tokens -> PW bounces to login/OTP instead of watch."""
+    try:
+        url = (page.url or "").lower()
+        if any(k in url for k in ("/login", "signin", "/auth", "otp", "/account/login")):
+            return True
+        txt = ""
+        try:
+            txt = (page.evaluate("() => document.body ? document.body.innerText.slice(0,1200) : ''") or "").lower()
+        except Exception:
+            txt = ""
+        keys = ("log in to continue", "login to continue", "please login",
+                "session expired", "verify otp", "enter otp", "resend otp")
+        return any(k in txt for k in keys)
+    except Exception:
+        return False
+
+
+def _relaunch_visible_for_login(p, browser, exe, prof, args, login_wait_ms, watch_fn):
+    """Expired tokens -> PW shows login/OTP. Close silent ctx, open VISIBLE for
+    manual login, wait, then close and relaunch SILENT for the capture."""
+    print("[watcher] login needed (tokens expired?) — opening VISIBLE window for manual login", flush=True)
+    try:
+        browser.close()
+    except Exception:
+        pass
+    browser_v = _launch_browser(p, exe, prof, args, False, "visible-login")
+    if browser_v is None:
+        return None, None
+    try:
+        ctx_v = browser_v.contexts[0] if browser_v.contexts else browser_v.new_context()
+        page_v = ctx_v.pages[0] if ctx_v.pages else ctx_v.new_page()
+        page_v.goto(watch_fn, wait_until="domcontentloaded", timeout=45000)
+        print("[watcher] VISIBLE login window open — log in to PW, then wait...", flush=True)
+        try:
+            page_v.wait_for_function("() => location.href.includes('/watch/')", timeout=login_wait_ms)
+        except Exception:
+            pass
+        # Logged in if we are back on /watch/ and the login markers are gone.
+        try:
+            ok = "/watch/" in (page_v.url or "") and not _needs_login(page_v)
+        except Exception:
+            ok = False
+        print(f"[watcher] login {'OK' if ok else 'NOT detected — continuing silent anyway'}", flush=True)
+    finally:
+        try:
+            browser_v.close()
+        except Exception:
+            pass
+    browser_s = _launch_browser(p, exe, prof, args, True, "silent-after-login")
+    if browser_s is None:
+        return None, None
+    ctx_s = browser_s.contexts[0] if browser_s.contexts else browser_s.new_context()
+    return browser_s, ctx_s
+
+
 def capture(job):
     """Official Chrome via remote-debugging: signed URL sniff + Widevine key read.
     Hibbiki has NO usable Widevine (page itself reports 'No Widevine support'),
@@ -53,14 +175,18 @@ def capture(job):
     CDP_PORT = 9333
     silent = CFG.get("silent", True)  # headless shell: no window, keeps CDM + extensions
     wp2_dir = str(Path(CFG.get("widevineproxy2_path", "") or "").resolve())
+    # Bundled-Chromium-safe args: NO --disable-features=... (crashes with
+    # --load-extension), only the minimal autoplay/mute/sandbox set.
     args = ["--no-first-run", "--no-default-browser-check",
             "--autoplay-policy=no-user-gesture-required",
-            "--disable-features=CrossOriginMediaPlaybackRequiresUserGesture",
-            "--mute-audio"]
+            "--mute-audio", "--disable-blink-features=AutomationControlled",
+            "--no-sandbox"]
     if wp2_dir and Path(wp2_dir).exists():
         args += [f"--disable-extensions-except={wp2_dir}", f"--load-extension={wp2_dir}"]
     if silent:
         args += ["--headless=new", "--disable-gpu", "--window-size=1280,800"]
+    if not _fresh_profile_guard(prof):
+        return None, None, None
     with sync_playwright() as p:
         # CDP smoke test on a throwaway profile before the real launch.
         try:
@@ -73,9 +199,11 @@ def capture(job):
         except Exception as e:
             print(f"[watcher] CDP smoke test: FAILED ({e})", flush=True)
             return None, None, None
-        browser = p.chromium.launch_persistent_context(
-            user_data_dir=str(prof), executable_path=exe,
-            headless=False, no_viewport=True, args=args)
+        browser = _launch_browser(p, exe, prof, args, False if not silent else True, "silent")
+        if browser is None:
+            return None, None, None
+        # NOTE: Playwright persistent context with headless arg spawns headed-shell;
+        # silent capture still runs without a visible window via --headless=new.
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
         # WP2 service-worker wait (15s): the ONLY reliable loaded signal.
         sw = None
@@ -289,8 +417,43 @@ def capture(job):
         # FIX 1b: abort if PW bounced us off /watch/ (wrong slug -> homepage).
         try:
             if "/watch/" not in (page.url or ""):
-                print(f"[watcher] URL redirected to {page.url} — aborting", flush=True)
-                return None, None, None
+                # Expired tokens look like a redirect too — offer visible login
+                # instead of dying when the page is actually asking to log in.
+                try:
+                    if _needs_login(page):
+                        rel = _relaunch_visible_for_login(
+                            p, browser, exe, prof, args, login_wait, watch_url(job))
+                        if rel[0] is None:
+                            return None, None, None
+                        browser, ctx = rel
+                        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                        try:
+                            page.goto(watch_url(job), wait_until="domcontentloaded", timeout=45000)
+                        except Exception as e:
+                            print(f"[watcher] post-login goto failed: {e}", flush=True)
+                            return None, None, None
+                    else:
+                        print(f"[watcher] URL redirected to {page.url} — aborting", flush=True)
+                        return None, None, None
+                except Exception:
+                    print(f"[watcher] URL redirected to {page.url} — aborting", flush=True)
+                    return None, None, None
+        except Exception:
+            pass
+        # Silent page already on /watch/ but showing login text: same flow.
+        try:
+            if "/watch/" in (page.url or "") and _needs_login(page):
+                rel = _relaunch_visible_for_login(
+                    p, browser, exe, prof, args, login_wait, watch_url(job))
+                if rel[0] is None:
+                    return None, None, None
+                browser, ctx = rel
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                try:
+                    page.goto(watch_url(job), wait_until="domcontentloaded", timeout=45000)
+                except Exception as e:
+                    print(f"[watcher] post-login goto failed: {e}", flush=True)
+                    return None, None, None
         except Exception:
             pass
         print("[watcher] waiting for login/dashboard...", flush=True)

@@ -3,7 +3,7 @@
   "output_dir": "D:\\DOWNLOADS\\pw_lectures",
   "nm3u8dl_path": "D:\\DOWNLOADS\\N_m3u8DL-RE_v0.6.0-beta_win-x64_20260629\\N_m3u8DL-RE.exe",
   "nm3u8dl_workdir": "D:\\DOWNLOADS\\N_m3u8DL-RE_v0.6.0-beta_win-x64_20260629",
-  "chrome_profile_dir": "C:\\Users\\tijil\\pw-official-profile",
+  "chrome_profile_dir": "C:\\Users\\tijil\\pw-playwright-profile-v2",
   "chromium_executable": "C:\\Users\\tijil\\AppData\\Local\\ms-playwright\\chromium-1243\\chrome-win64\\chrome.exe",
   "poll_seconds": 3,
   "login_wait_seconds": 300,
