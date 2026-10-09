@@ -164,20 +164,10 @@ class Downloader:
             return
         # Engine pre-checks WITHOUT launching the browser: surface config
         # errors on the card instead of silently dying in the worker.
-        # Thorium path (no chromium_executable anymore): verify the manager
-        # can resolve an exe (already downloaded) or report it missing.
-        try:
-            import sys as _sys
-            _sys.path.insert(0, str(Path(__file__).resolve().parent))
-            from thorium_manager import ThoriumManager
-            _tm = ThoriumManager(_engine.CFG.get("thorium_install_dir", ""))
-            exe = _tm._find_exe()
-        except Exception:
-            exe = None
-        if not exe or not Path(exe).exists():
-            self._emit(job_id, "error", 0,
-                       "Thorium not downloaded yet — start one capture to auto-download")
-            return
+        # Thorium path: only verify wp2 + downloader tooling here. NEVER
+        # gate on the Thorium exe — capture() auto-downloads it on first run,
+        # so refusing here would deadlock ("start a capture to download" while
+        # refusing every capture).
         wp2 = Path(_engine.CFG.get("widevineproxy2_path") or "")
         if not wp2.exists():
             self._emit(job_id, "error", 0, f"wp2-custom missing at {wp2}")
