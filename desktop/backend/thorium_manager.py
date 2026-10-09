@@ -156,16 +156,40 @@ class ThoriumManager:
         except Exception as e:
             print(f"[thorium] LAUNCH FAILED: {e}", flush=True)
             raise
-        sw = None
+        # CDP attach returns a Browser; the persistent ctx is contexts[0].
+        # Poll workers: WP2's service worker can take a few seconds to start.
         try:
-            sws = list(getattr(ctx, "service_workers", None) or [])
-            sw = sws[0] if sws else ctx.wait_for_event("serviceworker", timeout=15000)
+            _b = ctx
+            _ctx = None
+            try:
+                _ctxs = getattr(_b, "contexts", None) or []
+                _ctx = _ctxs[0] if _ctxs else _b
+            except Exception:
+                _ctx = _b
+            wp2_id = None
+            for _i in range(30):
+                try:
+                    _sws = list(getattr(_ctx, "service_workers", None) or [])
+                    for _w in _sws:
+                        _u = getattr(_w, "url", "") or ""
+                        if "bundle.min.js" in _u or "chrome-extension://" in _u:
+                            sw = _w
+                            break
+                    if sw is not None:
+                        break
+                except Exception:
+                    pass
+                import time as _tt
+                _tt.sleep(1)
         except Exception:
             pass
-        wp2_id = None
         try:
             wp2_id = sw.url.split("/")[2] if sw and getattr(sw, "url", "") else None
         except Exception:
-            pass
+            wp2_id = None
         print(f"[watcher] wp2_id={wp2_id}", flush=True)
-        return ctx, wp2_id
+        try:
+            _ctxs = getattr(ctx, "contexts", None) or []
+            return (_ctxs[0] if _ctxs else ctx), wp2_id
+        except Exception:
+            return ctx, wp2_id
