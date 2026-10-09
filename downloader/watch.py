@@ -190,6 +190,8 @@ def capture(job):
                 pass
             return None, None, None
         browser = ctx  # persistent ctx IS the browser handle
+        silent = bool(CFG.get("silent", True))
+        print(f"[watcher] Thorium running ({'SILENT' if silent else 'VISIBLE'})", flush=True)
         # stealth: hide automation flags so PW's devtool-detector doesn't blank the player
         try:
             ctx.add_init_script("""() => {
