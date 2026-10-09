@@ -96,7 +96,46 @@ def _fresh_profile_guard(prof):
         return False
 
 
+def _ctx_of(browser):
+    """launch_persistent_context returns a BrowserContext (NOT a Browser):
+    it has .pages/.new_page directly and NO .contexts. Normalize both."""
+    try:
+        ctxs = getattr(browser, "contexts", None)
+        if ctxs:
+            return ctxs[0]
+    except Exception:
+        pass
+def _ctx_of(browser):
+    """launch_persistent_context returns a BrowserContext (NOT a Browser):
+    it has .pages/.new_page directly and NO .contexts. Normalize both."""
+    try:
+        ctxs = getattr(browser, "contexts", None)
+        if ctxs:
+            return ctxs[0]
+    except Exception:
+        pass
+    return browser
+
+
+def _page_of(ctx):
+    try:
+        pages = getattr(ctx, "pages", None) or []
+        if pages:
+            return pages[0]
+    except Exception:
+        pass
+    return ctx.new_page()
+
+
+def _service_workers_of(ctx):
+    try:
+        return list(getattr(ctx, "service_workers", None) or [])
+    except Exception:
+        return []
+
+
 def _needs_login(page):
+    """Heuristic: expired tokens -> PW bounces to login/OTP instead of watch."""
     """Heuristic: expired tokens -> PW bounces to login/OTP instead of watch."""
     try:
         url = (page.url or "").lower()
@@ -204,12 +243,13 @@ def capture(job):
             return None, None, None
         # NOTE: Playwright persistent context with headless arg spawns headed-shell;
         # silent capture still runs without a visible window via --headless=new.
-        ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+        ctx = _ctx_of(browser)
         # WP2 service-worker wait (15s): the ONLY reliable loaded signal.
         sw = None
         try:
-            if len(ctx.service_workers) > 0:
-                sw = ctx.service_workers[0]
+            _sws = _service_workers_of(ctx)
+            if len(_sws) > 0:
+                sw = _sws[0]
             else:
                 try:
                     sw = ctx.wait_for_event("serviceworker", timeout=15000)
@@ -237,7 +277,7 @@ def capture(job):
                 const origOpen = window.open;
             }""")
         except Exception as e: print(f"[watcher] stealth script skipped: {e}", flush=True)
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page = _page_of(ctx)
         # FIX1: auto-dismiss any JS dialog before it can crash the driver
         try: page.on("dialog", lambda d: d.dismiss())
         except Exception as e: print(f"[watcher] dialog handler skipped: {e}", flush=True)
@@ -364,7 +404,7 @@ def capture(job):
         wp2_id = None
         sw = None
         try:
-            for w in ctx.service_workers:
+            for w in _service_workers_of(ctx):
                 if "library/background/bundle.min.js" in w.url:
                     sw = w
                     break
@@ -426,7 +466,7 @@ def capture(job):
                         if rel[0] is None:
                             return None, None, None
                         browser, ctx = rel
-                        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                        page = _page_of(ctx)
                         try:
                             page.goto(watch_url(job), wait_until="domcontentloaded", timeout=45000)
                         except Exception as e:
@@ -448,7 +488,7 @@ def capture(job):
                 if rel[0] is None:
                     return None, None, None
                 browser, ctx = rel
-                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                page = _page_of(ctx)
                 try:
                     page.goto(watch_url(job), wait_until="domcontentloaded", timeout=45000)
                 except Exception as e:
@@ -660,11 +700,12 @@ def capture(job):
         # --- NEW: Read keys directly from the WP2 service worker ---
         print("[watcher] reading keys from service worker storage...", flush=True)
         key = None
-        if ctx.service_workers:
+        _sws = _service_workers_of(ctx)
+        if _sws:
             sw = None
-            for w in ctx.service_workers:  # prefer the WP2 worker
+            for w in _service_workers_of(ctx):  # prefer the WP2 worker
                 if wp2_id and wp2_id in w.url: sw = w; break
-            sw = sw or ctx.service_workers[0]
+            sw = sw or _sws[0]
         # WP2 needs time for the license exchange; poll up to 30s for the KID match.
         # SPEED-ONLY: 60x500ms = same 30s window, 2x faster hit.
         want = (kid or "").replace("-", "").lower()
