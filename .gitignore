@@ -48,3 +48,9 @@ desktop/backend/config.json
 dist/
 build/
 *.spec
+
+# Thorium browser bundle + test scratch (auto-downloaded, per-machine)
+thorium/
+desktop/backend/selftest_out/
+desktop/backend/selftest_thorium/
+desktop/backend/wp2probe/

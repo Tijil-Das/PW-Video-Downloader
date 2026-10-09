@@ -113,24 +113,59 @@ class ThoriumManager:
         print(f"[thorium] WP2 extension ID: {ext_id}", flush=True)
         return ext_id
 
+    def _clean_locks(self, profile_dir: str) -> None:
+        prof = Path(profile_dir)
+        for name in ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile"]:
+            p = prof / name
+            try:
+                if p.exists() or p.is_symlink():
+                    p.unlink()
+            except Exception as e:
+                print(f"[thorium] could not remove {name}: {e}", flush=True)
+
+    def _wipe_if_incompatible(self, profile_dir: str) -> None:
+        prof = Path(profile_dir)
+        version_file = prof / "Last Version"
+        if version_file.exists():
+            try:
+                stored = version_file.read_text().strip()
+                major = int(stored.split(".")[0]) if stored else 0
+                if major > 138:
+                    print(f"[thorium] profile version {stored} incompatible, wiping", flush=True)
+                    shutil.rmtree(prof, ignore_errors=True)
+            except Exception as e:
+                print(f"[thorium] could not read version file: {e}", flush=True)
+        prof.mkdir(parents=True, exist_ok=True)
+
     def launch_context(self, playwright, profile_dir: str, wp2_source: str,
                        headless: bool = False):
         """Ensure all, launch Thorium + WP2, wait for worker. Returns ctx."""
         exe = self.ensure_installed()
+        self._wipe_if_incompatible(profile_dir)
+        self._clean_locks(profile_dir)
+        # Wipe deletes the injected profile: re-inject AFTER wipe, BEFORE launch.
         self.ensure_wp2_installed(profile_dir, wp2_source)
         print("[thorium] launching Thorium...", flush=True)
         # Playwright injects --disable-extensions by default for every
         # Chromium fork; on Thorium that kills pre-injected unpacked WP2
         # (instant exit 2147483651 after <launched>). Drop just that flag.
-        ctx = playwright.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            executable_path=exe,
-            headless=bool(headless),
-            ignore_default_args=["--disable-extensions"],
-            args=["--autoplay-policy=no-user-gesture-required",
-                  "--mute-audio",
-                  "--disable-blink-features=AutomationControlled",
-                  "--no-sandbox"])
+        args = ["--autoplay-policy=no-user-gesture-required",
+                "--mute-audio",
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--profile-directory=Default"]
+        try:
+            ctx = playwright.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                executable_path=exe,
+                headless=bool(headless),
+                no_viewport=True,
+                timeout=60000,
+                ignore_default_args=["--disable-extensions"],
+                args=args)
+        except Exception as e:
+            print(f"[thorium] LAUNCH FAILED: {e}", flush=True)
+            raise
         sw = None
         try:
             sws = list(getattr(ctx, "service_workers", None) or [])
