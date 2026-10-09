@@ -176,9 +176,10 @@ def capture(job):
     _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "desktop" / "backend"))
     from thorium_manager import ThoriumManager
     tm = ThoriumManager(thorium_dir)
+    silent = bool(CFG.get("silent", True))
     with sync_playwright() as p:
         try:
-            ctx, wp2_id = tm.launch_context(p, str(prof), wp2_src, headless=False)
+            ctx, wp2_id = tm.launch_context(p, str(prof), wp2_src, headless=silent)
         except Exception as e:
             print(f"[watcher] LAUNCH FAILED: {e}", flush=True)
             return None, None, None
@@ -190,7 +191,6 @@ def capture(job):
                 pass
             return None, None, None
         browser = ctx  # persistent ctx IS the browser handle
-        silent = bool(CFG.get("silent", True))
         print(f"[watcher] Thorium running ({'SILENT' if silent else 'VISIBLE'})", flush=True)
         # stealth: hide automation flags so PW's devtool-detector doesn't blank the player
         try:
@@ -415,9 +415,11 @@ def capture(job):
         except Exception:
             pass
         print("[watcher] waiting for login/dashboard...", flush=True)
-        try: page.wait_for_function(
-            "() => document.querySelector('video') !== null || location.href.includes('/watch/')",
-            timeout=login_wait)
+        try:
+            page.wait_for_function(
+                "() => (document.body && document.body.innerText.length > 500) || "
+                "document.querySelector('video') !== null",
+                timeout=login_wait)
         except Exception: print("[watcher] login wait timed out, trying sniff anyway...", flush=True)
         # SNIFF FIRST, probe CDM after: playback must start to trigger license;
         # EME probe consumes no CDM session and runs fine after sniff.

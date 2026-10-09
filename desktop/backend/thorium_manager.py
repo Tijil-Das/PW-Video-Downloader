@@ -117,6 +117,7 @@ class ThoriumManager:
         wp2 = str(Path(wp2_source).resolve())
         self.ensure_wp2_installed(profile_dir, wp2_source)
         print("[thorium] launching Thorium...", flush=True)
+        hd = bool(headless)
         args = ["--autoplay-policy=no-user-gesture-required",
                 "--mute-audio",
                 "--disable-blink-features=AutomationControlled",
@@ -124,13 +125,17 @@ class ThoriumManager:
                 "--profile-directory=Default",
                 f"--disable-extensions-except={wp2}",
                 f"--load-extension={wp2}"]
+        if hd:
+            args += ["--headless=new", "--disable-gpu", "--window-size=1280,800"]
         import subprocess as _sp
         import time as _t
         port = 9444
         cmd = [exe, f"--user-data-dir={profile_dir}",
                f"--remote-debugging-port={port}"] + args
         try:
-            proc = _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            proc = _sp.Popen(
+                cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                creationflags=getattr(_sp, "CREATE_NO_WINDOW", 0) if hd else 0)
         except Exception as e:
             print(f"[thorium] LAUNCH FAILED: {e}", flush=True)
             raise
