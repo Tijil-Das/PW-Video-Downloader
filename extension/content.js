@@ -31,9 +31,14 @@ function capture() {
   const cards = Array.from(document.querySelectorAll('div[class*="_card_"]'));
   const index = cards.indexOf(card);
   const name = card.querySelector('span[class*="_titleText_"]')?.textContent?.trim() || '';
-  // FIX 3: thumbnail hop 1/3 — read it off the card and ship it with the message.
-  const thumbnailUrl = card.querySelector('img[alt="lecture-thumbnail"]')?.src
-    || card.querySelector('img')?.src || '';
+  // FIX (thumbnail None): log what the DOM query actually returns + fallbacks.
+  const thumbImg = card.querySelector('img[alt="lecture-thumbnail"]');
+  console.log('[pw-cap] thumbnail element:', thumbImg);
+  console.log('[pw-cap] thumbnail src:', thumbImg?.src);
+  const thumbFb = card.querySelector('img[src*="static.pw.live"]')?.src
+    || (() => { try { return card.querySelector('[style*="background-image"]')?.style.backgroundImage || ''; } catch (e) { return ''; } })();
+  if (thumbFb) console.log('[pw-cap] thumbnail fallback hit:', String(thumbFb).slice(0, 120));
+  const thumbnailUrl = thumbImg?.src || thumbFb || card.querySelector('img')?.src || '';
   // batchSlug from path /batches/<slug>/ ; ids from query params
   const m = location.pathname.match(/\/batches\/([^/]+)/);
   const q = new URLSearchParams(location.search);

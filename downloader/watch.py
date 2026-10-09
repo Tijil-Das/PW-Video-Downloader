@@ -11,8 +11,11 @@ JOBS = Path(CFG["jobs_dir"]); OUT = Path(CFG["output_dir"])
 OUT.mkdir(parents=True, exist_ok=True); JOBS.mkdir(parents=True, exist_ok=True)
 
 def watch_url(j):
+    # FIX: batchSlug param MUST be the human slug (e.g. mission-100-jee-2027-225226),
+    # NOT the hex batchId. PW redirects to homepage on a wrong slug.
+    slug = j.get("batchSlug") or j["batchId"]
     s = j["scheduleId"]
-    return (f"https://www.pw.live/watch/?batchSlug={j['batchId']}&batchSubjectId={j['batchSubjectId']}"
+    return (f"https://www.pw.live/watch/?batchSlug={slug}&batchSubjectId={j['batchSubjectId']}"
             f"&subjectSlug={j['batchSubjectId']}&topicSlug=all&scheduleId={s}&type=penpencilvdo"
             f"&isPPJEnabled=true&entryPoint=BATCH_LECTURE_VIDEOS_{s}&learn2Earn=true"
             f"&parentId={j['batchId']}&vType=BATCHES&childId={s}")
@@ -61,6 +64,26 @@ def capture(job):
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}", timeout=8000)
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+        # FIX 2: wait for the WP2 service worker so wp2_id is known.
+        sw = None
+        try:
+            if len(ctx.service_workers) > 0:
+                sw = ctx.service_workers[0]
+            else:
+                try:
+                    sw = ctx.wait_for_event("serviceworker", timeout=10000)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            wp2_id = sw.url.split("/")[2] if sw and getattr(sw, "url", "") else None
+        except Exception:
+            wp2_id = None
+        print(f"[watcher] wp2_id={wp2_id}", flush=True)
+        if not wp2_id and job.get("isDrmEnabled", True):
+            print("[watcher] WP2 worker missing + DRM protected — refusing corrupt capture", flush=True)
+            return None, None, None
         # stealth: hide automation flags so PW's devtool-detector doesn't blank the player
         try:
             ctx.add_init_script("""() => {
@@ -140,9 +163,35 @@ def capture(job):
             except Exception: pass
         # SIGNED-URL SNIFF: register BEFORE navigation (player fetches MPD on load,
         # before any play click — the old post-detection registration missed it).
-        page.on("request", lambda r: signed.append(r.url)
-                if ("master.mpd" in r.url and ("Signature=" in r.url or "URLPrefix=" in r.url)
-                    and not signed) else None)
+        # FIX 3: tight sniff on RESPONSE (content-type checked) + crash guard.
+        try:
+            def _sniff_ok(r):
+                try:
+                    u = r.url or ""
+                    if "/master.mpd" not in u:
+                        return False
+                    if "Signature=" not in u and "URLPrefix=" not in u:
+                        return False
+                    ct = ""
+                    try:
+                        ct = (r.headers.get("content-type", "") or "").lower()
+                    except Exception:
+                        ct = ""
+                    if ct and ("dash" not in ct and "mpegurl" not in ct):
+                        return False
+                    return True
+                except Exception:
+                    return False
+            def _sniff(r):
+                try:
+                    if _sniff_ok(r) and not signed:
+                        signed.append(r.url)
+                except Exception:
+                    pass
+            page.on("response", _sniff)
+        except Exception as e:
+            print(f"[watcher] sniff setup failed: {e} - aborting", flush=True)
+            return None, None, None
         page.on("response", lambda r: print(f"[watcher] license-ish: {r.status} {r.url[:160]}", flush=True)
                 if any(k in r.url.lower() for k in ("widevine", "license", "/drm", "playready", "drm-")) else None)
         # LICENSE BODY SNIFF: capture challenge + response bytes for pywidevine-direct.
@@ -220,6 +269,13 @@ def capture(job):
             print(f"[watcher] WP2 pre-flight failed: {e}", flush=True)
             return None, None, None
         page.goto(watch_url(job), wait_until="domcontentloaded")
+        # FIX 1b: abort if PW bounced us off /watch/ (wrong slug -> homepage).
+        try:
+            if "/watch/" not in (page.url or ""):
+                print(f"[watcher] URL redirected to {page.url} — aborting", flush=True)
+                return None, None, None
+        except Exception:
+            pass
         print("[watcher] waiting for login/dashboard...", flush=True)
         try: page.wait_for_function(
             "() => document.querySelector('video') !== null || location.href.includes('/watch/')",
@@ -413,6 +469,10 @@ def capture(job):
                 print("[watcher] no signed URL captured - page crashed", flush=True)
                 browser.close()
                 return None, kid_from_mpd(job.get("mpdUrl", "")), None
+        # FIX 3b: guard empty list BEFORE touching signed[0].
+        if not signed:
+            print("[watcher] no signed URL captured", flush=True)
+            return None, None, None
         print("[watcher] signed URL captured", flush=True)
         kid = kid_from_mpd(signed[0]) or kid_from_mpd(job.get("mpdUrl", ""))
         print(f"[watcher] DEBUG KID: {kid}", flush=True)

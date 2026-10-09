@@ -300,7 +300,15 @@ async function handleCapture({ batchSlug, batchSubjectId, subjectId, chapterId, 
 
   // 3) Optional Widevine key if WidevineProxy2 cached one (best-effort)
   const store = await chrome.storage.local.get('wvp_key_' + scheduleId);
-  const thumb = d.thumbnail || d.videoDetails?.thumbnail || d.poster || null;
+  // FIX 4: log what actually arrived + fallbacks (card DOM lives in
+  // content.js; background sees the shipped value + API fields).
+  console.log('[pw-cap] thumbnail from card (msg):', thumbnailUrl);
+  const thumbApi = d.thumbnail || d.videoDetails?.thumbnail || d.poster || null;
+  console.log('[pw-cap] thumbnail api:', thumbApi);
+  // Extra DOM fallbacks are collected in content.js (img[src*=static.pw.live],
+  // [style*=background-image]) and arrive via thumbnailUrl; API is backup.
+  const thumb = thumbApi;
+  console.log('[pw-cap] thumbnail final:', (typeof thumbnailUrl === 'string' && thumbnailUrl) || thumb);
   const job = {
     scheduleId, name: listName, mpdUrl, isDrmEnabled,
     key: store['wvp_key_' + scheduleId] || null,
