@@ -35,43 +35,56 @@ def capture(job):
     Hibbiki has NO usable Widevine (page itself reports 'No Widevine support'),
     so we drive the real Chrome (full CDM) over CDP on a dedicated profile."""
     from playwright.sync_api import sync_playwright
-    import subprocess as sp
     global _CDM_VERIFIED
     signed, login_wait = [], CFG.get("login_wait_seconds", 300) * 1000
     prof = Path(CFG["chrome_profile_dir"])
-    exe = CFG.get("chromium_executable")
+    # Thorium path from the brief does not exist on this box (verified).
+    # Use Playwright's bundled Chromium — Chrome-for-Testing builds honor
+    # --load-extension while branded Chrome 137+ silently ignores it.
+    default_exe = Path.home() / "AppData" / "Local" / "ms-playwright" / "chromium-1243" / "chrome-win64" / "chrome.exe"
+    exe = CFG.get("chromium_executable") or str(default_exe)
+    if "thorium" in str(exe).lower() and not Path(exe).exists():
+        print(f"[watcher] Thorium missing at {exe} — falling back to bundled Chromium", flush=True)
+        exe = str(default_exe)
     if not exe or not Path(exe).exists():
-        print(f"[watcher] ERROR: Chrome not found at {exe}", flush=True)
+        print(f"[watcher] ERROR: Chromium not found at {exe}", flush=True)
         return None, None, None
+    print(f"[watcher] launched {exe}", flush=True)
     CDP_PORT = 9333
     silent = CFG.get("silent", True)  # headless shell: no window, keeps CDM + extensions
-    wp2_dir = str(Path(CFG.get("widevineproxy2_path", "") or ""))
-    args = [exe, f"--user-data-dir={prof}", f"--remote-debugging-port={CDP_PORT}",
-         "--no-first-run", "--no-default-browser-check",
-         "--autoplay-policy=no-user-gesture-required",
-         "--disable-features=CrossOriginMediaPlaybackRequiresUserGesture",
-         "--mute-audio"]
-    # BUGFIX: silent Chrome must explicitly load wp2-custom; a bare profile
-    # has no extensions installed, so the pre-flight found no worker -> abort.
+    wp2_dir = str(Path(CFG.get("widevineproxy2_path", "") or "").resolve())
+    args = ["--no-first-run", "--no-default-browser-check",
+            "--autoplay-policy=no-user-gesture-required",
+            "--disable-features=CrossOriginMediaPlaybackRequiresUserGesture",
+            "--mute-audio"]
     if wp2_dir and Path(wp2_dir).exists():
         args += [f"--disable-extensions-except={wp2_dir}", f"--load-extension={wp2_dir}"]
-    chrome_proc = sp.Popen(
-        args
-        + (["--headless=new", "--disable-gpu", "--window-size=1280,800"] if silent else ["about:blank"]),
-        stdout=sp.DEVNULL, stderr=sp.DEVNULL,
-        creationflags=getattr(sp, "CREATE_NO_WINDOW", 0))
-    print(f"[watcher] official Chrome launched ({'SILENT' if silent else 'VISIBLE'} pid {chrome_proc.pid}, CDP :{CDP_PORT})", flush=True)
+    if silent:
+        args += ["--headless=new", "--disable-gpu", "--window-size=1280,800"]
     with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}", timeout=8000)
+        # CDP smoke test on a throwaway profile before the real launch.
+        try:
+            test_ctx = p.chromium.launch_persistent_context(
+                user_data_dir=str(prof) + "_test",
+                executable_path=exe, headless=True,
+                args=["--no-sandbox", "--disable-gpu"], timeout=15000)
+            test_ctx.close()
+            print("[watcher] CDP smoke test: PASSED", flush=True)
+        except Exception as e:
+            print(f"[watcher] CDP smoke test: FAILED ({e})", flush=True)
+            return None, None, None
+        browser = p.chromium.launch_persistent_context(
+            user_data_dir=str(prof), executable_path=exe,
+            headless=False, no_viewport=True, args=args)
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-        # FIX 2: wait for the WP2 service worker so wp2_id is known.
+        # WP2 service-worker wait (15s): the ONLY reliable loaded signal.
         sw = None
         try:
             if len(ctx.service_workers) > 0:
                 sw = ctx.service_workers[0]
             else:
                 try:
-                    sw = ctx.wait_for_event("serviceworker", timeout=10000)
+                    sw = ctx.wait_for_event("serviceworker", timeout=15000)
                 except Exception:
                     pass
         except Exception:
@@ -81,8 +94,12 @@ def capture(job):
         except Exception:
             wp2_id = None
         print(f"[watcher] wp2_id={wp2_id}", flush=True)
-        if not wp2_id and job.get("isDrmEnabled", True):
-            print("[watcher] WP2 worker missing + DRM protected — refusing corrupt capture", flush=True)
+        if not wp2_id:
+            print("[watcher] ABORT: WP2 not loaded. Cannot capture Widevine key.", flush=True)
+            try:
+                browser.close()
+            except Exception:
+                pass
             return None, None, None
         # stealth: hide automation flags so PW's devtool-detector doesn't blank the player
         try:
