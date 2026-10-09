@@ -30,66 +30,12 @@ def kid_from_mpd(mpd_url):
     except Exception as e: print(f"[watcher] KID parse skipped: {e}", flush=True)
     return None
 
-def _launch_browser(p, exe, prof, args, headless, tag):
-    """Legacy helper (bundled-Chromium path). Kept for compat; branded-Chrome
-    path uses subprocess + connect_over_cdp instead."""
-    print(f"[watcher] profile: {prof}", flush=True)
-    hd = bool(headless)
-    use_args = [a for a in args if a != "--headless=new"]
-    if hd:
-        use_args = use_args + ["--headless=new", "--disable-gpu", "--window-size=1280,800"]
-    try:
-        browser = p.chromium.launch_persistent_context(
-            user_data_dir=str(prof), executable_path=exe,
-            headless=hd, no_viewport=True, args=use_args, timeout=60000)
-        print(f"[watcher] launch OK ({tag})", flush=True)
-        return browser
-    except Exception as e:
-        print(f"[watcher] LAUNCH FAILED ({tag}): {e}", flush=True)
-        return None
-
-
-def _ensure_wp2_installed(prof):
-    """Branded Chrome 137+ ignores --load-extension, so WP2 must live IN the
-    profile. One-time check: if the unpacked entry is missing from
-    <profile>/Default/Preferences, print the manual install step and continue
-    (worker wait below will abort cleanly if still absent)."""
-    try:
-        import json as _j
-        wp2_src = Path(CFG.get("widevineproxy2_path", "") or "").resolve()
-        prefs = Path(prof) / "Default" / "Preferences"
-        if prefs.exists():
-            try:
-                data = _j.loads(prefs.read_text(encoding="utf-8"))
-                settings = (data.get("extensions") or {}).get("settings") or {}
-                for _id, _e in settings.items():
-                    _p = str((_e or {}).get("path", ""))
-                    if "wp2" in _id.lower() or "widevineproxy" in _id.lower() \
-                            or (wp2_src.name.lower() in _p.lower() and _p):
-                        print(f"[watcher] WP2 pre-installed in profile ({_id})", flush=True)
-                        return True
-            except Exception as e:
-                print(f"[watcher] Preferences read skipped: {e}", flush=True)
-        print("[watcher] WP2 NOT in profile Preferences — ONE-TIME manual step:", flush=True)
-        print(f"[watcher]   1. chrome.exe --user-data-dir={prof} --no-first-run", flush=True)
-        print("[watcher]   2. chrome://extensions -> Developer mode ON -> Load unpacked", flush=True)
-        print(f"[watcher]   3. select: {wp2_src}", flush=True)
-        print("[watcher]   4. close Chrome, re-run. (Worker wait below aborts if skipped.)", flush=True)
-        return False
-    except Exception as e:
-        print(f"[watcher] WP2 check skipped: {e}", flush=True)
-        return False
-
-
 def _fresh_profile_guard(prof):
     """Official branded-Chrome profile: NEVER back up/rename (holds logins).
     Just refuse a foreign Chromium-owned dir; otherwise pass through."""
     try:
         prof = Path(prof)
         off = str(prof).lower()
-        if "pw-official-profile" in off:
-            # Our long-lived login profile — leave it alone, always OK.
-            return True
         marker = prof / ".pw-chromium-owner"
         ours = "playwright-chromium-1243"
         if prof.exists():
@@ -183,40 +129,22 @@ def _needs_login(page):
         return False
 
 
-def _spawn_chrome(exe, prof, port, silent):
-    """Shared subprocess launcher for branded Chrome (silent + visible)."""
-    import subprocess as sp
-    base = [exe, f"--user-data-dir={prof}", f"--remote-debugging-port={port}",
-            "--no-first-run", "--no-default-browser-check",
-            "--autoplay-policy=no-user-gesture-required",
-            "--mute-audio", "--disable-blink-features=AutomationControlled",
-            "--no-sandbox"]
-    if silent:
-        base += ["--headless=new", "--disable-gpu", "--window-size=1280,800"]
-    else:
-        base += ["about:blank"]
-    return sp.Popen(base, stdout=sp.DEVNULL, stderr=sp.DEVNULL,
-                    creationflags=getattr(sp, "CREATE_NO_WINDOW", 0) if silent else 0)
-
-
-def _relaunch_visible_for_login(p, browser, exe, prof, port, login_wait_ms, watch_fn):
-    """Expired tokens -> PW shows login/OTP. Close silent ctx, open VISIBLE for
-    manual login, wait, then close and relaunch SILENT for the capture."""
-    print("[watcher] login needed (tokens expired?) — opening VISIBLE window for manual login", flush=True)
+def _relaunch_visible_for_login(tm, p, ctx, wp2_src, prof, login_wait_ms, watch_fn):
+    """Expired tokens -> PW shows login/OTP. Close ctx, open VISIBLE Thorium
+    for manual login (same profile), wait, close, relaunch silent ctx."""
+    print("[watcher] login needed (tokens expired?) - opening VISIBLE window for manual login", flush=True)
     try:
-        browser.close()
+        ctx.close()
     except Exception:
         pass
     try:
-        vis_proc = _spawn_chrome(exe, prof, port, silent=False)
-        print(f"[watcher] VISIBLE Chrome pid {vis_proc.pid} — log in to PW, then wait...", flush=True)
-        browser_v = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}", timeout=60000)
-        ctx_v = _ctx_of(browser_v)
+        ctx_v, _ = tm.launch_context(p, str(prof), wp2_src, headless=False)
         page_v = _page_of(ctx_v)
         try:
             page_v.goto(watch_fn, wait_until="domcontentloaded", timeout=45000)
         except Exception as e:
             print(f"[watcher] visible goto failed: {e}", flush=True)
+        print("[watcher] VISIBLE login window open - log in to PW, then wait...", flush=True)
         try:
             page_v.wait_for_function("() => location.href.includes('/watch/')", timeout=login_wait_ms)
         except Exception:
@@ -225,107 +153,43 @@ def _relaunch_visible_for_login(p, browser, exe, prof, port, login_wait_ms, watc
             ok = "/watch/" in (page_v.url or "") and not _needs_login(page_v)
         except Exception:
             ok = False
-        print(f"[watcher] login {'OK' if ok else 'NOT detected — continuing silent anyway'}", flush=True)
+        print(f"[watcher] login {'OK' if ok else 'NOT detected - continuing anyway'}", flush=True)
     finally:
         try:
-            browser_v.close()
+            ctx_v.close()
         except Exception:
             pass
-        try:
-            vis_proc.terminate()
-        except Exception:
-            pass
-        import time as _t
-        _t.sleep(2)
-    silent_proc = _spawn_chrome(exe, prof, port, silent=True)
-    print(f"[watcher] silent Chrome relaunched (pid {silent_proc.pid})", flush=True)
-    browser_s = p.chromium.connect_over_cdp(f"http://127.0.0.1:{port}", timeout=60000)
-    ctx_s = _ctx_of(browser_s)
-    return browser_s, ctx_s
+    ctx_s, wp2_s = tm.launch_context(p, str(prof), wp2_src, headless=False)
+    return ctx_s, wp2_s
 
 
 def capture(job):
-    """Official Chrome via remote-debugging: signed URL sniff + Widevine key read.
-    Hibbiki has NO usable Widevine (page itself reports 'No Widevine support'),
-    so we drive the real Chrome (full CDM) over CDP on a dedicated profile."""
+    """Thorium (Widevine built-in) via ThoriumManager: auto-download, WP2
+    pre-injected, Playwright-driven. No manual steps except PW login."""
+    import sys as _sys
     from playwright.sync_api import sync_playwright
-    import subprocess as sp
     global _CDM_VERIFIED
     signed, login_wait = [], CFG.get("login_wait_seconds", 300) * 1000
     prof = Path(CFG["chrome_profile_dir"])
-    # Branded Chrome 154: full Widevine CDM (bundled Chromium 1243 ships NO CDM
-    # -> NotSupportedError + "CDM version: not found"). Branded Chrome 137+
-    # IGNORES --load-extension, so WP2 must be pre-installed in the profile
-    # (one-time manual step below) — no extension flags passed at all.
-    exe = CFG.get("chromium_executable") or r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-    if not exe or not Path(exe).exists():
-        print(f"[watcher] ERROR: Chrome not found at {exe}", flush=True)
-        return None, None, None
-    print(f"[watcher] launched {exe}", flush=True)
-    CDP_PORT = 9333
-    silent = CFG.get("silent", True)
-    if not _fresh_profile_guard(prof):
-        return None, None, None
-    _ensure_wp2_installed(prof)
-    args = [exe, f"--user-data-dir={prof}", f"--remote-debugging-port={CDP_PORT}",
-            "--no-first-run", "--no-default-browser-check",
-            "--autoplay-policy=no-user-gesture-required",
-            "--mute-audio", "--disable-blink-features=AutomationControlled",
-            "--no-sandbox"]
-    chrome_proc = sp.Popen(
-        args + (["--headless=new", "--disable-gpu", "--window-size=1280,800"]
-                if silent else ["about:blank"]),
-        stdout=sp.DEVNULL, stderr=sp.DEVNULL,
-        creationflags=getattr(sp, "CREATE_NO_WINDOW", 0))
-    print(f"[watcher] official Chrome launched ({'SILENT' if silent else 'VISIBLE'} pid {chrome_proc.pid}, CDP :{CDP_PORT})", flush=True)
+    thorium_dir = CFG.get("thorium_install_dir", str(ROOT / ".." / "thorium"))
+    wp2_src = str(Path(CFG.get("widevineproxy2_path", "") or "").resolve())
+    _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "desktop" / "backend"))
+    from thorium_manager import ThoriumManager
+    tm = ThoriumManager(thorium_dir)
     with sync_playwright() as p:
-        # CDP smoke test on a throwaway profile before the real attach.
         try:
-            test_p = sp.Popen(
-                [exe, f"--user-data-dir={prof}_test", f"--remote-debugging-port={CDP_PORT + 1}",
-                 "--no-first-run", "--headless=new", "--disable-gpu", "about:blank"],
-                stdout=sp.DEVNULL, stderr=sp.DEVNULL,
-                creationflags=getattr(sp, "CREATE_NO_WINDOW", 0))
-            import time as _t
-            _t.sleep(3)
-            _ok = test_p.poll() is None
-            try:
-                test_p.terminate()
-            except Exception:
-                pass
-            if not _ok:
-                raise RuntimeError("test chrome exited early")
-            print("[watcher] CDP smoke test: PASSED", flush=True)
+            ctx, wp2_id = tm.launch_context(p, str(prof), wp2_src, headless=False)
         except Exception as e:
-            print(f"[watcher] CDP smoke test: FAILED ({e})", flush=True)
+            print(f"[watcher] LAUNCH FAILED: {e}", flush=True)
             return None, None, None
-        browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{CDP_PORT}", timeout=60000)
-        ctx = _ctx_of(browser)
-        # WP2 service-worker wait (15s): the ONLY reliable loaded signal.
-        sw = None
-        try:
-            _sws = _service_workers_of(ctx)
-            if len(_sws) > 0:
-                sw = _sws[0]
-            else:
-                try:
-                    sw = ctx.wait_for_event("serviceworker", timeout=15000)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        try:
-            wp2_id = sw.url.split("/")[2] if sw and getattr(sw, "url", "") else None
-        except Exception:
-            wp2_id = None
-        print(f"[watcher] wp2_id={wp2_id}", flush=True)
         if not wp2_id:
             print("[watcher] ABORT: WP2 not loaded. Cannot capture Widevine key.", flush=True)
             try:
-                browser.close()
+                ctx.close()
             except Exception:
                 pass
             return None, None, None
+        browser = ctx  # persistent ctx IS the browser handle
         # stealth: hide automation flags so PW's devtool-detector doesn't blank the player
         try:
             ctx.add_init_script("""() => {
@@ -517,11 +381,9 @@ def capture(job):
                 # instead of dying when the page is actually asking to log in.
                 try:
                     if _needs_login(page):
-                        rel = _relaunch_visible_for_login(
-                            p, browser, exe, prof, CDP_PORT, login_wait, watch_url(job))
-                        if rel[0] is None:
-                            return None, None, None
-                        browser, ctx = rel
+                        ctx, wp2_id = _relaunch_visible_for_login(
+                            tm, p, ctx, wp2_src, prof, login_wait, watch_url(job))
+                        browser = ctx
                         page = _page_of(ctx)
                         try:
                             page.goto(watch_url(job), wait_until="domcontentloaded", timeout=45000)
@@ -539,11 +401,9 @@ def capture(job):
         # Silent page already on /watch/ but showing login text: same flow.
         try:
             if "/watch/" in (page.url or "") and _needs_login(page):
-                rel = _relaunch_visible_for_login(
-                    p, browser, exe, prof, CDP_PORT, login_wait, watch_url(job))
-                if rel[0] is None:
-                    return None, None, None
-                browser, ctx = rel
+                ctx, wp2_id = _relaunch_visible_for_login(
+                    tm, p, ctx, wp2_src, prof, login_wait, watch_url(job))
+                browser = ctx
                 page = _page_of(ctx)
                 try:
                     page.goto(watch_url(job), wait_until="domcontentloaded", timeout=45000)
