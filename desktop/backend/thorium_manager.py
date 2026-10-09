@@ -119,10 +119,14 @@ class ThoriumManager:
         exe = self.ensure_installed()
         self.ensure_wp2_installed(profile_dir, wp2_source)
         print("[thorium] launching Thorium...", flush=True)
+        # Playwright injects --disable-extensions by default for every
+        # Chromium fork; on Thorium that kills pre-injected unpacked WP2
+        # (instant exit 2147483651 after <launched>). Drop just that flag.
         ctx = playwright.chromium.launch_persistent_context(
             user_data_dir=str(profile_dir),
             executable_path=exe,
             headless=bool(headless),
+            ignore_default_args=["--disable-extensions"],
             args=["--autoplay-policy=no-user-gesture-required",
                   "--mute-audio",
                   "--disable-blink-features=AutomationControlled",

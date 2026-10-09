@@ -313,6 +313,8 @@ async function handleCapture({ batchSlug, batchSubjectId, subjectId, chapterId, 
     scheduleId, name: listName, mpdUrl, isDrmEnabled,
     key: store['wvp_key_' + scheduleId] || null,
     batchSlug, batchId, batchSubjectId, subjectId, chapterId, cardIndex: index,
+    // FIX live-update routing: sender tab is the only reliable key.
+    tabId: senderTabId,
     thumbnailUrl: (typeof thumbnailUrl === 'string' && /^https?:\/\//.test(thumbnailUrl) ? thumbnailUrl : '') || thumb || '',
     capturedAt: new Date().toISOString()
   };
@@ -346,7 +348,9 @@ function connectWS() {
   ws.onopen = () => {
     wsConnected = true; wsDelay = 1000;
     console.log('[pw-cap] WS connected to app');
-    try { ws.send(JSON.stringify({ type: 'hello' })); } catch (e) {}
+    // FIX: send the CURRENT port alongside hello so the app can spot a
+  // mismatch (manifest pinned to one port; app config may differ).
+  try { ws.send(JSON.stringify({ type: 'hello', port: wsPort })); } catch (e) {}
   };
   ws.onmessage = (e) => {
     let msg = null;
@@ -354,12 +358,13 @@ function connectWS() {
     if (msg.type === 'ping') { try { ws.send(JSON.stringify({ type: 'pong' })); } catch (err) {} return; }
     if (msg.type === 'welcome' || msg.type === 'ack') return;
     if (['status', 'done', 'error'].includes(msg.type)) {
-      // BUGFIX: sendMessage throws if the tab's content script went stale
-      // (navigation); query fresh + catch per-tab so one dead tab can't
-      // swallow the update meant for the visible card.
+      // FIX live routing: prefer the capture tab (job.tabId echoed by the
+      // server). Broadcast fallback stays for multi-tab visibility.
+      const target = msg.tabId || null;
       (async () => {
         let tabs = [];
         try { tabs = await chrome.tabs.query({ url: 'https://www.pw.live/*' }); } catch (err) { return; }
+        if (target) tabs = tabs.filter((t) => t.id === target).concat(tabs.filter((t) => t.id !== target));
         await Promise.all(tabs.map(async (t) => {
           try { await chrome.tabs.sendMessage(t.id, { type: 'PW_JOB_STATUS', ...msg }); }
           catch (err) {

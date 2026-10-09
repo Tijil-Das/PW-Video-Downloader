@@ -37,6 +37,15 @@ def _norm(p):
 
 
 def detect_extension(extension_id="", extension_path=""):
+    repo_ext = Path(__file__).resolve().parents[2] / "extension"
+    if extension_path:
+        try:
+            if _norm(extension_path) == _norm(str(repo_ext)):
+                pass
+        except Exception:
+            pass
+    else:
+        extension_path = str(repo_ext)
     user_data = _user_data_dir()
     profiles_hit, methods = [], set()
     ext_path, entry_path = "", ""
@@ -44,7 +53,6 @@ def detect_extension(extension_id="", extension_path=""):
 
     for profile in _existing_profiles(user_data):
         prof_dir = user_data / profile
-        # METHOD 1 — Preferences JSON
         try:
             prefs = json.loads((prof_dir / "Preferences").read_text(encoding="utf-8"))
             settings = prefs.get("extensions", {}).get("settings", {})
@@ -58,10 +66,17 @@ def detect_extension(extension_id="", extension_path=""):
                     ext_path = entry_path or ext_path
             elif extension_path:
                 # Unpacked IDs rotate: match by install path instead.
-                want = _norm(extension_path)
+                # ALSO match when the config path is stale/empty: our repo
+                # extension dir is authoritative, so compare against it too.
+                cands = {_norm(extension_path)}
+                try:
+                    cands.add(_norm(str(repo_ext)))
+                except Exception:
+                    pass
                 for key, entry in settings.items():
                     p = str((entry or {}).get("path", ""))
-                    if p and (want in _norm(p) or _norm(p) in want):
+                    np = _norm(p)
+                    if p and any(w in np or np in w for w in cands if w):
                         profiles_hit.append(profile)
                         methods.add("preferences")
                         ext_path = p
@@ -83,6 +98,10 @@ def detect_extension(extension_id="", extension_path=""):
     profiles_hit = sorted(set(profiles_hit))
     installed = bool(profiles_hit)
     if not installed and extension_path and Path(extension_path).exists():
+        # Unpacked but not found in any profile's Preferences (ID rotated or
+        # loaded in a Thorium/other-browser profile): report the honest state
+        # — path exists, browser registration unconfirmed — so the UI shows
+        # the folder + a reload hint instead of a false "installed".
         ext_path = ext_path or extension_path
     return {
         "installed": installed,

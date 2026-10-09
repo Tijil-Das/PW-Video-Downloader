@@ -56,7 +56,14 @@ class Api:
     def _on_status(self, job_id, stage, pct, detail):
         # FIX 1: never touch window here (worker thread). Queue the JS;
         # the timer drain calls evaluate_js (which marshals via Invoke).
-        payload = {"jobId": job_id, "stage": stage, "pct": pct, "detail": detail}
+        # Include tabId so the extension routes to the capture card.
+        try:
+            _rec = next((j for j in self._downloader.list_jobs()
+                         if j.get("jobId") == job_id), {})
+        except Exception:
+            _rec = {}
+        payload = {"jobId": job_id, "stage": stage, "pct": pct, "detail": detail,
+                   "tabId": (_rec or {}).get("tabId")}
         try:
             self._server.broadcast({"type": "status", **payload})
         except Exception:

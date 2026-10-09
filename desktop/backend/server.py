@@ -84,12 +84,17 @@ class BridgeServer:
                         try:
                             await ws.send(json.dumps({
                                 "type": "error", "jobId": msg.get("jobId") or msg.get("scheduleId"),
+                                "tabId": msg.get("tabId"),
                                 "code": "no_config",
                                 "message": "Set base storage path and batch name in the app Settings first"}))
                         except Exception:
                             pass
                         continue
                     job_id = self.downloader.submit(msg)
+                    try:
+                        self.downloader.set_job_tab(job_id, msg.get("tabId"))
+                    except Exception:
+                        pass
                     self.on_event("job", job_id)
                     try:
                         await ws.send(json.dumps({"type": "ack", "jobId": job_id}))

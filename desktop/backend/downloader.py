@@ -42,10 +42,21 @@ class Downloader:
             self.jobs[job_id] = rec
             snapshot = dict(rec)
         try:
+            # Live routing: carry the capture tab so the extension targets
+            # the right card (broadcast in main.py forwards full snapshot).
             self.on_status(job_id, stage, pct, detail)
         except Exception:
             pass
         return snapshot
+
+    def set_job_tab(self, job_id, tab_id):
+        try:
+            with self.lock:
+                if job_id in self.jobs and tab_id is not None:
+                    self.jobs[job_id]["tabId"] = tab_id
+        except Exception:
+            pass
+        return True
 
     def submit(self, job):
         job = dict(job or {})
@@ -59,6 +70,7 @@ class Downloader:
                 "batchId": job.get("batchId", ""),
                 "batchSubjectId": job.get("batchSubjectId", ""),
                 "thumbnailUrl": job.get("thumbnailUrl", ""),
+                "tabId": job.get("tabId"),
                 "stage": "queued", "pct": 0, "detail": "queued", "path": None,
                 "_job": job, "_kind": "lecture",
             }
