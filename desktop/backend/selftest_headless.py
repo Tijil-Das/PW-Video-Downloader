@@ -56,10 +56,15 @@ def main():
         api._config = {"ws_port": 19877, "extension_id": "",
                        "output_dir": str(BACKEND / "selftest_out")}
         api._window = None
-        api._downloader = Downloader({"output_dir": str(BACKEND / "selftest_out"),
-                                      "base_storage_path": str(BACKEND / "selftest_out"),
-                                      "batch_name": "Selftest", "batch_slug": "", "batch_id": ""},
-                                     api._on_status.__get__(api, Api))
+        cfg = {"output_dir": str(BACKEND / "selftest_out"),
+               "base_storage_path": str(BACKEND / "selftest_out"),
+               "batch_name": "Selftest", "batch_slug": "", "batch_id": "",
+               "thorium_install_dir": str(BACKEND / "selftest_thorium")}
+        # Fake Thorium exe so the engine pre-check passes without downloading.
+        import thorium_manager as tm_mod
+        (BACKEND / "selftest_thorium").mkdir(parents=True, exist_ok=True)
+        (BACKEND / "selftest_thorium" / "thorium.exe").write_bytes(b"x")
+        api._downloader = Downloader(cfg, api._on_status.__get__(api, Api))
         api._server = srv = BridgeServer(api._config, api._downloader)
         import folder_resolver as fr_mod
         orig_resolve = fr_mod.resolve_folder_path
