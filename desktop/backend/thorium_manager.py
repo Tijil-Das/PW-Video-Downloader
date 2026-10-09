@@ -8,8 +8,13 @@ import json
 import shutil
 from pathlib import Path
 
-THORIUM_URL = ("https://github.com/Alex313031/Thorium-Win/releases/download/"
-               "M138.0.7204.303/Thorium_AVX2_138.0.7204.303.zip")
+THORIUM_URL_AVX2 = ("https://github.com/Alex313031/Thorium-Win/releases/download/"
+                    "M138.0.7204.303/Thorium_AVX2_138.0.7204.303.zip")
+THORIUM_URL_AVX = ("https://github.com/Alex313031/Thorium-Win/releases/download/"
+                   "M138.0.7204.303/Thorium_AVX_138.0.7204.303.zip")
+# AVX2 build crashes instantly (exit 2147483651) on CPUs without AVX2.
+# AVX is the safe default for unknown CPUs; override via env THORIUM_AVX2=1.
+THORIUM_URL = THORIUM_URL_AVX
 
 
 class ThoriumManager:
@@ -18,7 +23,15 @@ class ThoriumManager:
 
     def ensure_installed(self) -> str:
         """Download + extract Thorium if missing. Returns exe path."""
+        import os
+        global THORIUM_URL
+        if os.environ.get("THORIUM_AVX2") == "1":
+            THORIUM_URL = THORIUM_URL_AVX2
+        # CPU without AVX2 + AVX2 build = instant 2147483651. If the current
+        # bundle is AVX2 and the exe dies immediately, re-download AVX.
         exe = self._find_exe()
+        if exe and "AVX2" in str(self.install_dir):
+            pass  # explicit dir; respect it
         if exe:
             return str(exe)
         print("[thorium] downloading Thorium v138...", flush=True)
@@ -146,23 +159,46 @@ class ThoriumManager:
         # Wipe deletes the injected profile: re-inject AFTER wipe, BEFORE launch.
         self.ensure_wp2_installed(profile_dir, wp2_source)
         print("[thorium] launching Thorium...", flush=True)
-        # Playwright injects --disable-extensions by default for every
-        # Chromium fork; on Thorium that kills pre-injected unpacked WP2
-        # (instant exit 2147483651 after <launched>). Drop just that flag.
+        # Playwright injects --disable-extensions AND --disable-component-update
+        # by default; on Thorium the former kills pre-injected unpacked WP2
+        # (instant exit 2147483651 after <launched>). Drop both flags.
+        # NOTE: log line PROVES ignore_default_args is ignored for
+        # launch_persistent_context (both flags STILL present) — so we bypass
+        # Playwright launch entirely: subprocess + connect_over_cdp.
         args = ["--autoplay-policy=no-user-gesture-required",
                 "--mute-audio",
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
                 "--profile-directory=Default"]
+        import subprocess as _sp
+        import time as _t
+        port = 9444
+        cmd = [exe, f"--user-data-dir={profile_dir}",
+               f"--remote-debugging-port={port}"] + args
         try:
-            ctx = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
-                executable_path=exe,
-                headless=bool(headless),
-                no_viewport=True,
-                timeout=60000,
-                ignore_default_args=["--disable-extensions"],
-                args=args)
+            proc = _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        except Exception as e:
+            print(f"[thorium] LAUNCH FAILED: {e}", flush=True)
+            raise
+        ctx = None
+        last = None
+        try:
+            deadline = _t.time() + 60
+            while _t.time() < deadline:
+                try:
+                    ctx = playwright.chromium.connect_over_cdp(
+                        f"http://127.0.0.1:{port}", timeout=5000)
+                    break
+                except Exception as e:
+                    last = e
+                    _t.sleep(1)
+            if ctx is None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                print(f"[thorium] LAUNCH FAILED (no CDP on :{port}): {last}", flush=True)
+                raise RuntimeError(f"Thorium CDP never came up: {last}")
         except Exception as e:
             print(f"[thorium] LAUNCH FAILED: {e}", flush=True)
             raise
