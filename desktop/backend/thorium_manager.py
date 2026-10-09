@@ -73,56 +73,12 @@ class ThoriumManager:
         return "".join(chr(ord("a") + int(c, 16)) for c in h)
 
     def ensure_wp2_installed(self, profile_dir: str, wp2_source: str) -> str:
-        """Pre-inject WP2 into the profile via Preferences. Returns ext ID."""
-        print("[thorium] injecting WP2 into profile...", flush=True)
+        """Stage WP2 files for --load-extension. NEVER hand-write Preferences:
+        Thorium 138 crashes (exit 2147483651) on foreign Preferences entries.
+        Returns ext ID (computed, for logging only)."""
+        print("[thorium] staging WP2 for load-extension...", flush=True)
         wp2 = Path(wp2_source).resolve()
-        prof = Path(profile_dir)
         ext_id = self._ext_id(str(wp2))
-        dest = prof / "Default" / "Extensions" / ext_id / "1.2.7_0"
-        dest.mkdir(parents=True, exist_ok=True)
-        for item in wp2.iterdir():
-            t = dest / item.name
-            try:
-                if item.is_dir():
-                    if t.exists():
-                        shutil.rmtree(t, ignore_errors=True)
-                    shutil.copytree(item, t)
-                else:
-                    shutil.copy2(item, t)
-            except Exception as e:
-                print(f"[thorium] copy skipped {item.name}: {e}", flush=True)
-        manifest = json.loads((wp2 / "manifest.json").read_text(encoding="utf-8"))
-        prefs_path = prof / "Default" / "Preferences"
-        prefs = {}
-        if prefs_path.exists():
-            try:
-                prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
-            except Exception:
-                prefs = {}
-        exts = prefs.setdefault("extensions", {})
-        settings = exts.setdefault("settings", {})
-        settings[ext_id] = {
-            "active_permissions": {
-                "api": manifest.get("permissions", []),
-                "explicit_host": manifest.get("host_permissions", []),
-                "manifest_permissions": [],
-                "scriptable_host": [],
-            },
-            "creation_flags": 38,
-            "from_webstore": False,
-            "incognito": False,
-            "location": 4,
-            "manifest": manifest,
-            "path": str(wp2),
-            "state": 1,
-            "was_installed_by_default": False,
-            "was_installed_by_oem": False,
-        }
-        exts.setdefault("ui", {})["developer_mode"] = True
-        if prefs.pop("protection", None) is not None:
-            print("[thorium] dropped stale Preferences MAC; browser re-signs", flush=True)
-        prefs_path.parent.mkdir(parents=True, exist_ok=True)
-        prefs_path.write_text(json.dumps(prefs), encoding="utf-8")
         print(f"[thorium] WP2 extension ID: {ext_id}", flush=True)
         return ext_id
 
@@ -152,24 +108,22 @@ class ThoriumManager:
 
     def launch_context(self, playwright, profile_dir: str, wp2_source: str,
                        headless: bool = False):
-        """Ensure all, launch Thorium + WP2, wait for worker. Returns ctx."""
+        """Ensure all, launch Thorium + WP2 via --load-extension, wait for
+        worker. Returns ctx. Verified: hand-written Preferences kills Thorium,
+        --load-extension on a clean profile lives."""
         exe = self.ensure_installed()
         self._wipe_if_incompatible(profile_dir)
         self._clean_locks(profile_dir)
-        # Wipe deletes the injected profile: re-inject AFTER wipe, BEFORE launch.
+        wp2 = str(Path(wp2_source).resolve())
         self.ensure_wp2_installed(profile_dir, wp2_source)
         print("[thorium] launching Thorium...", flush=True)
-        # Playwright injects --disable-extensions AND --disable-component-update
-        # by default; on Thorium the former kills pre-injected unpacked WP2
-        # (instant exit 2147483651 after <launched>). Drop both flags.
-        # NOTE: log line PROVES ignore_default_args is ignored for
-        # launch_persistent_context (both flags STILL present) — so we bypass
-        # Playwright launch entirely: subprocess + connect_over_cdp.
         args = ["--autoplay-policy=no-user-gesture-required",
                 "--mute-audio",
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
-                "--profile-directory=Default"]
+                "--profile-directory=Default",
+                f"--disable-extensions-except={wp2}",
+                f"--load-extension={wp2}"]
         import subprocess as _sp
         import time as _t
         port = 9444
