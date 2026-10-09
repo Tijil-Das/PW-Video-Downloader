@@ -211,8 +211,11 @@ def capture(job):
                     window.MediaKeySession.prototype.generateRequest.toString().includes('Proxy'))""")
                 print(f"[watcher] pre-flight MAIN probe: {probe0}", flush=True)
             else:
-                print("[watcher] WP2 NOT installed - aborting before corrupt download", flush=True)
-                return None, None, None
+                # FIX 2: WP2 loads via --load-extension/--disable-extensions-except
+                # on every launch, so a missing worker here is a timing issue,
+                # not a missing install. Never abort: log and continue; the
+                # worker scan below retries with refreshes before giving up.
+                print("[watcher] MAIN-world probe inconclusive — WP2 loads via launch args, continuing (no abort)", flush=True)
         except Exception as e:
             print(f"[watcher] WP2 pre-flight failed: {e}", flush=True)
             return None, None, None

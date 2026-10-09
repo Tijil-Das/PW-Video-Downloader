@@ -53,17 +53,29 @@ def main():
         from main import Api
         events = []
         api = Api.__new__(Api)  # no window, no auto-start: wire manually
-        api.config = {"ws_port": 19877, "extension_id": ""}
-        api.window = None
-        api.downloader = Downloader({"output_dir": str(BACKEND / "selftest_out")},
-                                    api._on_status.__get__(api, Api))
-        api.server = srv = BridgeServer(api.config, api.downloader)
-        orig_emit = api.downloader._emit
+        api._config = {"ws_port": 19877, "extension_id": "",
+                       "output_dir": str(BACKEND / "selftest_out")}
+        api._window = None
+        api._downloader = Downloader({"output_dir": str(BACKEND / "selftest_out"),
+                                      "base_storage_path": str(BACKEND / "selftest_out"),
+                                      "batch_name": "Selftest", "batch_slug": "", "batch_id": ""},
+                                     api._on_status.__get__(api, Api))
+        api._server = srv = BridgeServer(api._config, api._downloader)
+        import folder_resolver as fr_mod
+        orig_resolve = fr_mod.resolve_folder_path
+        fr_mod.resolve_folder_path = lambda job: {
+            "subject_name": "Selftest Subject", "chapter_name": "Selftest Chapter",
+            "lecture_date": "2026-01-01", "lecture_date_iso": "2026-01-01T00:00:00.000Z",
+            "thumbnail_url": job.get("thumbnailUrl") or None,
+            "relative_path": "Selftest Subject/Selftest Chapter/Demo.mkv",
+            "subject_slug": "", "chapter_slug": "", "chapter_id": "",
+            "error": None}
+        orig_emit = api._downloader._emit
         # record events AND run the real bridge path
         def rec_emit(job_id, stage, pct=0, detail=""):
             events.append((job_id, stage, pct, detail))
             return orig_emit(job_id, stage, pct, detail)
-        api.downloader._emit = rec_emit
+        api._downloader._emit = rec_emit
         assert srv.start()
         time.sleep(1.0)
 
@@ -75,7 +87,9 @@ def main():
                 hello = json.loads(await asyncio.wait_for(ws.recv(), 5))
                 assert hello["type"] == "welcome", hello
                 await ws.send(json.dumps({"type": "job", "jobId": "j1",
-                                          "scheduleId": "s1", "name": "Demo"}))
+                                          "scheduleId": "s1", "name": "Demo",
+                                          "batchId": "b1", "batchSlug": "b1",
+                                          "batchSubjectId": "sub1"}))
                 got_ack, got_done, stages = False, None, []
                 # Linear recv with deadline: pong replies inline, never
                 # starve the reader with a background task.
@@ -105,6 +119,11 @@ def main():
         print("SELFTEST PASS", done.get("path"), [s for _, s, _, _ in events])
     finally:
         dl_mod._engine = orig_engine
+        try:
+            import folder_resolver as _fr
+            _fr.resolve_folder_path = orig_resolve
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

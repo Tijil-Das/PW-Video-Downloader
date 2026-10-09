@@ -251,7 +251,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   return true; // async reply
 });
 
-async function handleCapture({ batchSlug, batchSubjectId, subjectId, chapterId, index, name }, senderTabId) {
+async function handleCapture({ batchSlug, batchSubjectId, subjectId, chapterId, index, name, thumbnailUrl }, senderTabId) {
   if (!batchSubjectId || index == null || index < 0) throw new Error('missing ids/card index');
   // Resolve slug -> hex batchId via purchased-batches map
   await ensureBatchMap();
@@ -305,7 +305,8 @@ async function handleCapture({ batchSlug, batchSubjectId, subjectId, chapterId, 
     scheduleId, name: listName, mpdUrl, isDrmEnabled,
     key: store['wvp_key_' + scheduleId] || null,
     batchSlug, batchId, batchSubjectId, subjectId, chapterId, cardIndex: index,
-    thumbnailUrl: thumb, capturedAt: new Date().toISOString()
+    thumbnailUrl: (typeof thumbnailUrl === 'string' && /^https?:\/\//.test(thumbnailUrl) ? thumbnailUrl : '') || thumb || '',
+    capturedAt: new Date().toISOString()
   };
   // 4) Send to desktop app over WebSocket (falls back to file if app down)
   if (wsConnected && ws?.readyState === 1) {

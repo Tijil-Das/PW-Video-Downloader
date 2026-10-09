@@ -31,6 +31,9 @@ function capture() {
   const cards = Array.from(document.querySelectorAll('div[class*="_card_"]'));
   const index = cards.indexOf(card);
   const name = card.querySelector('span[class*="_titleText_"]')?.textContent?.trim() || '';
+  // FIX 3: thumbnail hop 1/3 — read it off the card and ship it with the message.
+  const thumbnailUrl = card.querySelector('img[alt="lecture-thumbnail"]')?.src
+    || card.querySelector('img')?.src || '';
   // batchSlug from path /batches/<slug>/ ; ids from query params
   const m = location.pathname.match(/\/batches\/([^/]+)/);
   const q = new URLSearchParams(location.search);
@@ -39,7 +42,7 @@ function capture() {
     batchSubjectId: q.get('batchSubjectId') || '',
     subjectId: q.get('subjectId') || '',
     chapterId: q.get('chapterId') || '',
-    index, name
+    index, name, thumbnailUrl
   };
   chrome.runtime.sendMessage(msg, res => {
     if (chrome.runtime.lastError || !res?.ok) toast('Capture failed: ' + (res?.error || chrome.runtime.lastError?.message || 'unknown'));
